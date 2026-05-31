@@ -38,7 +38,7 @@
       "port": 9100
     },
     "functions": {
-      "port": 5002
+      "port": 5004
     },
     "firestore": {
       "port": 8081
