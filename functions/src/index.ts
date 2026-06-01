@@ -1,4 +1,6 @@
+import { randomUUID } from 'crypto'
 import * as admin from 'firebase-admin'
+import { FieldValue } from 'firebase-admin/firestore'
 import { onRequest } from 'firebase-functions/v2/https'
 import { defineSecret } from 'firebase-functions/params'
 import { verifyClassroomToken, ClassroomTokenPayload } from './engine/verifyToken'
@@ -447,15 +449,154 @@ export const verifyAttendanceCode = onRequest(async (req, res) => {
 /**
  * Triggers the matching algorithm for a game instance.
  * Called by the instructor dashboard ("Match Now" button).
- * Reads eligible participants from Firestore, writes groups back.
+ *
+ * Eligible participants: attendance verified + currently in RTDB presence.
+ * Writes GraysGroup documents and stamps group_id / is_lead on participants.
+ * Idempotent: if groups already exist, returns them without re-running.
+ *
+ * Request body (emulator): { _dev: { game_instance_id } }
+ * Request body (production): { token: "<instructor JWT>" }
+ * Response: { ok: true, groups: [...] }
  */
 export const triggerMatching = onRequest(async (req, res) => {
-  // TODO: read eligible participants from Firestore
-  // TODO: run matchParticipants()
-  // TODO: write GraysGroup records to Firestore
-  // TODO: update participant records with group_id
-  void req
-  res.status(501).json({ error: 'Not yet implemented' })
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' })
+    return
+  }
+
+  const body = req.body as Record<string, unknown>
+  let gameInstanceId: string
+
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+
+  if (isEmulator && body._dev != null) {
+    const dev = body._dev as Record<string, unknown>
+    if (typeof dev.game_instance_id !== 'string') {
+      res.status(400).json({ error: '_dev requires game_instance_id' })
+      return
+    }
+    gameInstanceId = dev.game_instance_id
+  } else {
+    if (typeof body.token !== 'string') {
+      res.status(400).json({ error: 'Missing token' })
+      return
+    }
+    let payload: ClassroomTokenPayload
+    try {
+      payload = verifyClassroomToken(body.token)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Invalid token'
+      res.status(401).json({ error: message })
+      return
+    }
+    if (payload.role !== 'instructor') {
+      res.status(403).json({ error: 'Instructor access required' })
+      return
+    }
+    gameInstanceId = payload.game_instance_id
+  }
+
+  try {
+    const db = admin.firestore()
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+
+    // Idempotency guard: return existing groups if matching already ran.
+    const existingGroupsSnap = await instanceRef.collection('groups').limit(1).get()
+    if (!existingGroupsSnap.empty) {
+      const allGroupsSnap = await instanceRef.collection('groups').get()
+      const groups = allGroupsSnap.docs.map((d) => {
+        const data = d.data()
+        return {
+          group_id: data.group_id as string,
+          game_instance_id: data.game_instance_id as string,
+          chris_participants: data.chris_participants as string[],
+          kelly_participants: data.kelly_participants as string[],
+          lead_participant_id: data.lead_participant_id as string,
+          status: data.status as string,
+        }
+      })
+      res.json({ ok: true, groups, alreadyMatched: true })
+      return
+    }
+
+    // Read presence from RTDB to identify connected students.
+    const presenceSnap = await admin
+      .database()
+      .ref(`presence/${gameInstanceId}`)
+      .once('value')
+    const presentIds = new Set<string>(Object.keys(presenceSnap.val() ?? {}))
+
+    // Read all participants; filter to attended + present.
+    const participantsSnap = await instanceRef.collection('participants').get()
+    const eligible = participantsSnap.docs
+      .filter((doc) => {
+        const d = doc.data()
+        return (
+          d.attendance_confirmed_at != null &&
+          (d.role === 'Chris' || d.role === 'Kelly') &&
+          presentIds.has(doc.id)
+        )
+      })
+      .map((doc) => ({
+        participant_id: doc.id,
+        role: doc.data().role as 'Chris' | 'Kelly',
+      }))
+
+    const chrisCount = eligible.filter((p) => p.role === 'Chris').length
+    const kellyCount = eligible.filter((p) => p.role === 'Kelly').length
+    if (chrisCount === 0 || kellyCount === 0) {
+      res
+        .status(400)
+        .json({ error: 'Need at least one Chris and one Kelly present to match.' })
+      return
+    }
+
+    // Run the matching algorithm.
+    const rawGroups = matchParticipants(eligible)
+
+    // Assign UUIDs and prepare Firestore writes.
+    const batch = db.batch()
+    const groups = rawGroups.map((g) => {
+      const groupId = randomUUID()
+      const groupRef = instanceRef.collection('groups').doc(groupId)
+      batch.set(groupRef, {
+        group_id: groupId,
+        game_instance_id: gameInstanceId,
+        chris_participants: g.chris_participants,
+        kelly_participants: g.kelly_participants,
+        lead_participant_id: g.lead_participant_id,
+        status: 'matched',
+        matched_at: FieldValue.serverTimestamp(),
+      })
+      // Stamp each participant's record with group_id and lead status.
+      for (const pid of g.chris_participants) {
+        batch.update(instanceRef.collection('participants').doc(pid), {
+          group_id: groupId,
+          is_lead: pid === g.lead_participant_id,
+        })
+      }
+      for (const pid of g.kelly_participants) {
+        batch.update(instanceRef.collection('participants').doc(pid), {
+          group_id: groupId,
+          is_lead: false,
+        })
+      }
+      return {
+        group_id: groupId,
+        game_instance_id: gameInstanceId,
+        chris_participants: g.chris_participants,
+        kelly_participants: g.kelly_participants,
+        lead_participant_id: g.lead_participant_id,
+        status: 'matched',
+      }
+    })
+
+    await batch.commit()
+    res.json({ ok: true, groups })
+  } catch (err) {
+    console.error('triggerMatching error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
 })
 
 /**

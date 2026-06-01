@@ -30,6 +30,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Groups are written by the Cloud Function; any authenticated participant
+    // can read them (group contents are not sensitive — names are already
+    // visible to the instructor).
+    match /game_instances/{instanceId}/groups/{groupId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
     // Default deny for everything else.
     match /{document=**} {
       allow read, write: if false;

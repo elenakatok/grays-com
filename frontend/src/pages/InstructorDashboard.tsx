@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ref, onValue } from 'firebase/database'
-import { generateAttendanceCode, type InstructorDevArgs } from '../api'
+import {
+  generateAttendanceCode,
+  triggerMatching,
+  type InstructorDevArgs,
+  type MatchGroupResult,
+} from '../api'
 import { rtdb } from '../firebase'
 
 /**
@@ -12,8 +17,6 @@ import { rtdb } from '../firebase'
  * Dev URL: /dashboard?_dev_game_instance_id=<uuid>
  */
 
-// How stale a presence record has to be before showing 🟡 idle.
-// Students heartbeat every 30s; 45s gives a 15s grace window.
 const IDLE_THRESHOLD_MS = 45_000
 
 type AttendingEntry = { display_name: string; role: string; confirmed_at: number }
@@ -78,6 +81,35 @@ export default function InstructorDashboard() {
       unsubPresence()
     }
   }, [devGameInstanceId])
+
+  // ── Matching ─────────────────────────────────────────────────────
+  const [groups, setGroups] = useState<MatchGroupResult[] | null>(null)
+  const [matching, setMatching] = useState(false)
+  const [matchError, setMatchError] = useState<string | null>(null)
+
+  const activeChrisCount = Object.entries(attending).filter(
+    ([pid, info]) => info.role === 'Chris' && presenceStatus(presence[pid]) !== 'disconnected',
+  ).length
+  const activeKellyCount = Object.entries(attending).filter(
+    ([pid, info]) => info.role === 'Kelly' && presenceStatus(presence[pid]) !== 'disconnected',
+  ).length
+  const canMatch = devGameInstanceId != null && activeChrisCount >= 1 && activeKellyCount >= 1
+
+  const handleMatch = () => {
+    if (!devGameInstanceId) return
+    setMatching(true)
+    setMatchError(null)
+    const args: InstructorDevArgs = { _dev: { game_instance_id: devGameInstanceId } }
+    triggerMatching(args)
+      .then((result) => {
+        setGroups(result.groups)
+        setMatching(false)
+      })
+      .catch((err: unknown) => {
+        setMatchError(err instanceof Error ? err.message : 'Matching failed.')
+        setMatching(false)
+      })
+  }
 
   // ── Derived counts ───────────────────────────────────────────────
   const attendingList = Object.entries(attending)
@@ -157,7 +189,11 @@ export default function InstructorDashboard() {
             </p>
             <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
               {attendingList
-                .sort(([, a], [, b]) => a.role.localeCompare(b.role) || a.display_name.localeCompare(b.display_name))
+                .sort(
+                  ([, a], [, b]) =>
+                    a.role.localeCompare(b.role) ||
+                    a.display_name.localeCompare(b.display_name),
+                )
                 .map(([pid, info]) => {
                   const status = presenceStatus(presence[pid])
                   return (
@@ -173,7 +209,9 @@ export default function InstructorDashboard() {
                     >
                       <span title={status}>{STATUS_ICON[status]}</span>
                       <span style={{ fontWeight: 500 }}>{info.display_name}</span>
-                      <span style={{ color: '#666', fontSize: '0.875rem' }}>({info.role})</span>
+                      <span style={{ color: '#666', fontSize: '0.875rem' }}>
+                        ({info.role})
+                      </span>
                     </li>
                   )
                 })}
@@ -181,6 +219,79 @@ export default function InstructorDashboard() {
           </>
         )}
       </section>
+
+      {/* ── Match Now ─────────────────────────────────────────────── */}
+      <section style={{ marginTop: '2.5rem', maxWidth: '640px' }}>
+        <h2 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem' }}>
+          Match Now
+        </h2>
+
+        {groups == null ? (
+          <div>
+            <p style={{ color: '#555', marginBottom: '1rem' }}>
+              {activeChrisCount} Chris{activeChrisCount !== 1 ? 'es' : ''} +{' '}
+              {activeKellyCount} {activeKellyCount !== 1 ? 'Kellys' : 'Kelly'} ready to
+              match
+            </p>
+            <button
+              onClick={handleMatch}
+              disabled={!canMatch || matching}
+              style={{ fontSize: '1rem', padding: '0.6rem 1.5rem' }}
+            >
+              {matching ? 'Matching…' : 'Match Now'}
+            </button>
+            {!canMatch && (
+              <p style={{ color: '#888', fontSize: '0.875rem', marginTop: '0.5rem' }}>
+                Need at least one Chris and one Kelly present.
+              </p>
+            )}
+            {matchError && (
+              <p style={{ color: '#c00', marginTop: '0.75rem' }}>{matchError}</p>
+            )}
+          </div>
+        ) : (
+          <GroupsDisplay groups={groups} attending={attending} />
+        )}
+      </section>
     </main>
+  )
+}
+
+function GroupsDisplay({
+  groups,
+  attending,
+}: {
+  groups: MatchGroupResult[]
+  attending: Record<string, AttendingEntry>
+}) {
+  const name = (pid: string) => attending[pid]?.display_name ?? pid.slice(0, 8) + '…'
+
+  return (
+    <div>
+      <p style={{ color: '#555', marginBottom: '1rem' }}>
+        {groups.length} group{groups.length !== 1 ? 's' : ''} matched.
+      </p>
+      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+        {groups.map((g, i) => {
+          const chrisLabels = g.chris_participants.map((pid) => {
+            const isLead = pid === g.lead_participant_id
+            return `${name(pid)} (Chris${isLead ? ', lead' : ''})`
+          })
+          const kellyLabels = g.kelly_participants.map((pid) => `${name(pid)} (Kelly)`)
+          return (
+            <li
+              key={g.group_id}
+              style={{
+                padding: '0.5rem 0',
+                borderBottom: '1px solid #f0f0f0',
+              }}
+            >
+              <span style={{ fontWeight: 500 }}>Group {i + 1}:</span>{' '}
+              {[...chrisLabels, ...kellyLabels].join(' + ')}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }

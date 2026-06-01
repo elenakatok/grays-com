@@ -64,3 +64,18 @@ export const generateAttendanceCode = (args: InstructorDevArgs) =>
 
 export const verifyAttendanceCode = (args: CallArgs, code: string) =>
   callFunction<{ ok: boolean }>('verifyAttendanceCode', { ...args, code })
+
+export type MatchGroupResult = {
+  group_id: string
+  game_instance_id: string
+  chris_participants: string[]
+  kelly_participants: string[]
+  lead_participant_id: string
+  status: string
+}
+
+export const triggerMatching = (args: InstructorDevArgs) =>
+  callFunction<{ ok: boolean; groups: MatchGroupResult[]; alreadyMatched?: boolean }>(
+    'triggerMatching',
+    args,
+  )
