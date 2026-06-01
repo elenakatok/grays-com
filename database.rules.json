@@ -1,5 +1,19 @@
 {
   "rules": {
+    "presence": {
+      "$instanceId": {
+        ".read": true,
+        "$participantId": {
+          ".write": "auth != null && auth.uid == $participantId"
+        }
+      }
+    },
+    "attending": {
+      "$instanceId": {
+        ".read": true,
+        ".write": false
+      }
+    },
     ".read": false,
     ".write": false
   }

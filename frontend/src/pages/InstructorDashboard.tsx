@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { ref, onValue } from 'firebase/database'
 import { generateAttendanceCode, type InstructorDevArgs } from '../api'
+import { rtdb } from '../firebase'
 
 /**
  * Live instructor dashboard.
@@ -9,25 +11,39 @@ import { generateAttendanceCode, type InstructorDevArgs } from '../api'
  *
  * Dev URL: /dashboard?_dev_game_instance_id=<uuid>
  */
+
+// How stale a presence record has to be before showing 🟡 idle.
+// Students heartbeat every 30s; 45s gives a 15s grace window.
+const IDLE_THRESHOLD_MS = 45_000
+
+type AttendingEntry = { display_name: string; role: string; confirmed_at: number }
+type PresenceEntry = { online: boolean; last_seen: number }
+
+function presenceStatus(entry: PresenceEntry | undefined): 'active' | 'idle' | 'disconnected' {
+  if (!entry?.online) return 'disconnected'
+  return Date.now() - (entry.last_seen ?? 0) > IDLE_THRESHOLD_MS ? 'idle' : 'active'
+}
+
+const STATUS_ICON = { active: '🟢', idle: '🟡', disconnected: '🔴' } as const
+
 export default function InstructorDashboard() {
   const [searchParams] = useSearchParams()
   const devGameInstanceId = import.meta.env.DEV
     ? searchParams.get('_dev_game_instance_id')
     : null
 
+  // ── Attendance code ──────────────────────────────────────────────
   const [code, setCode] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [codeError, setCodeError] = useState<string | null>(null)
 
   const handleGenerate = () => {
     if (!devGameInstanceId) {
-      setError(
-        'No game instance ID. Add ?_dev_game_instance_id=<uuid> to the URL.',
-      )
+      setCodeError('No game instance ID. Add ?_dev_game_instance_id=<uuid> to the URL.')
       return
     }
     setGenerating(true)
-    setError(null)
+    setCodeError(null)
     const args: InstructorDevArgs = { _dev: { game_instance_id: devGameInstanceId } }
     generateAttendanceCode(args)
       .then((result) => {
@@ -35,10 +51,38 @@ export default function InstructorDashboard() {
         setGenerating(false)
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Failed to generate code.')
+        setCodeError(err instanceof Error ? err.message : 'Failed to generate code.')
         setGenerating(false)
       })
   }
+
+  // ── Real-time presence ───────────────────────────────────────────
+  const [attending, setAttending] = useState<Record<string, AttendingEntry>>({})
+  const [presence, setPresence] = useState<Record<string, PresenceEntry>>({})
+
+  useEffect(() => {
+    if (!devGameInstanceId) return
+
+    const attendingRef = ref(rtdb, `attending/${devGameInstanceId}`)
+    const presenceRef = ref(rtdb, `presence/${devGameInstanceId}`)
+
+    const unsubAttending = onValue(attendingRef, (snap) => {
+      setAttending((snap.val() as Record<string, AttendingEntry>) ?? {})
+    })
+    const unsubPresence = onValue(presenceRef, (snap) => {
+      setPresence((snap.val() as Record<string, PresenceEntry>) ?? {})
+    })
+
+    return () => {
+      unsubAttending()
+      unsubPresence()
+    }
+  }, [devGameInstanceId])
+
+  // ── Derived counts ───────────────────────────────────────────────
+  const attendingList = Object.entries(attending)
+  const chrisCount = attendingList.filter(([, a]) => a.role === 'Chris').length
+  const kellyCount = attendingList.filter(([, a]) => a.role === 'Kelly').length
 
   return (
     <main
@@ -51,6 +95,7 @@ export default function InstructorDashboard() {
     >
       <h1 style={{ marginTop: 0 }}>Instructor Dashboard — Grays.com</h1>
 
+      {/* ── Attendance Code ────────────────────────────────────────── */}
       <section style={{ marginTop: '2rem', maxWidth: '640px' }}>
         <h2 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem' }}>
           Attendance Code
@@ -91,8 +136,49 @@ export default function InstructorDashboard() {
           </div>
         )}
 
-        {error && (
-          <p style={{ color: '#c00', marginTop: '0.75rem' }}>{error}</p>
+        {codeError && (
+          <p style={{ color: '#c00', marginTop: '0.75rem' }}>{codeError}</p>
+        )}
+      </section>
+
+      {/* ── Students Present ──────────────────────────────────────── */}
+      <section style={{ marginTop: '2.5rem', maxWidth: '640px' }}>
+        <h2 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem' }}>
+          Students Present
+        </h2>
+
+        {attendingList.length === 0 ? (
+          <p style={{ color: '#555' }}>No students have verified attendance yet.</p>
+        ) : (
+          <>
+            <p style={{ color: '#555', marginBottom: '1rem' }}>
+              {chrisCount} Chris{chrisCount !== 1 ? 'es' : ''} + {kellyCount}{' '}
+              {kellyCount !== 1 ? 'Kellys' : 'Kelly'} verified present
+            </p>
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+              {attendingList
+                .sort(([, a], [, b]) => a.role.localeCompare(b.role) || a.display_name.localeCompare(b.display_name))
+                .map(([pid, info]) => {
+                  const status = presenceStatus(presence[pid])
+                  return (
+                    <li
+                      key={pid}
+                      style={{
+                        padding: '0.4rem 0',
+                        borderBottom: '1px solid #f0f0f0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      <span title={status}>{STATUS_ICON[status]}</span>
+                      <span style={{ fontWeight: 500 }}>{info.display_name}</span>
+                      <span style={{ color: '#666', fontSize: '0.875rem' }}>({info.role})</span>
+                    </li>
+                  )
+                })}
+            </ul>
+          </>
         )}
       </section>
     </main>

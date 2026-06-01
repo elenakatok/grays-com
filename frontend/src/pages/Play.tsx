@@ -11,7 +11,7 @@ import Phase1NameEntry from '../phases/Phase1NameEntry'
 import Phase1HoldForSync from '../phases/Phase1HoldForSync'
 import Phase2ConfirmationGate from '../phases/Phase2ConfirmationGate'
 import Phase2AttendanceCode from '../phases/Phase2AttendanceCode'
-import Phase2WaitingRoomPlaceholder from '../phases/Phase2WaitingRoomPlaceholder'
+import Phase2WaitingRoom from '../phases/Phase2WaitingRoom'
 
 /**
  * Entry point for classroom-launched (and emulator dev-mode) sessions.
@@ -31,9 +31,14 @@ type GamePhase =
   | { name: 'hold-for-sync' }
   | { name: 'confirmation-gate' }
   | { name: 'attendance-code' }
-  | { name: 'waiting-room-placeholder' }
+  | { name: 'waiting-room'; participantId: string; gameInstanceId: string; displayName: string; role: 'Chris' | 'Kelly' }
 
-type SessionInfo = { participantId: string; gameInstanceId: string }
+type SessionInfo = {
+  participantId: string
+  gameInstanceId: string
+  displayName: string
+  role: 'Chris' | 'Kelly'
+}
 
 export default function Play() {
   const [searchParams] = useSearchParams()
@@ -73,7 +78,13 @@ export default function Play() {
       try {
         const { role, customToken, participant_id, game_instance_id } =
           await assignRole(resolvedCallArgs)
-        sessionRef.current = { participantId: participant_id, gameInstanceId: game_instance_id }
+        // Initialise with role from assignRole; displayName filled in below once Firestore is read.
+        sessionRef.current = {
+          participantId: participant_id,
+          gameInstanceId: game_instance_id,
+          role,
+          displayName: '',
+        }
 
         await signInWithCustomToken(auth, customToken)
 
@@ -81,14 +92,28 @@ export default function Play() {
         const participantSnap = await getDoc(
           doc(db, 'game_instances', game_instance_id, 'participants', participant_id),
         )
-        if (participantSnap.data()?.prep_status === 'complete') {
-          const pdata = participantSnap.data()!
+        const pdata = participantSnap.data()
+        if (pdata?.display_name) {
+          sessionRef.current.displayName = pdata.display_name as string
+        }
+
+        if (pdata?.prep_status === 'complete') {
           const confirmedReady = pdata.confirmed_ready_at != null
           const attendanceDone = pdata.attendance_confirmed_at != null
           if (!cancelled) {
-            if (attendanceDone) setPhase({ name: 'waiting-room-placeholder' })
-            else if (confirmedReady) setPhase({ name: 'attendance-code' })
-            else setPhase({ name: 'hold-for-sync' })
+            if (attendanceDone) {
+              setPhase({
+                name: 'waiting-room',
+                participantId: participant_id,
+                gameInstanceId: game_instance_id,
+                displayName: sessionRef.current.displayName,
+                role,
+              })
+            } else if (confirmedReady) {
+              setPhase({ name: 'attendance-code' })
+            } else {
+              setPhase({ name: 'hold-for-sync' })
+            }
           }
           return
         }
@@ -187,13 +212,23 @@ export default function Play() {
     return (
       <Phase2AttendanceCode
         callArgs={callArgsRef.current!}
-        onValid={() => setPhase({ name: 'waiting-room-placeholder' })}
+        onValid={() => {
+          const { participantId, gameInstanceId, displayName, role } = sessionRef.current!
+          setPhase({ name: 'waiting-room', participantId, gameInstanceId, displayName, role })
+        }}
       />
     )
   }
 
-  if (phase.name === 'waiting-room-placeholder') {
-    return <Phase2WaitingRoomPlaceholder />
+  if (phase.name === 'waiting-room') {
+    return (
+      <Phase2WaitingRoom
+        participantId={phase.participantId}
+        gameInstanceId={phase.gameInstanceId}
+        displayName={phase.displayName}
+        role={phase.role}
+      />
+    )
   }
 
   // phase.name === 'info'
