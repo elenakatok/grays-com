@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { signInWithCustomToken } from 'firebase/auth'
 import { auth } from '../firebase'
-import { assignRole, getInfoUrls } from '../api'
+import { type CallArgs, assignRole, getInfoUrls } from '../api'
 import Phase1Info from '../phases/Phase1Info'
+import Phase1KnowledgeCheck from '../phases/Phase1KnowledgeCheck'
 
 /**
  * Entry point for classroom-launched (and emulator dev-mode) sessions.
@@ -17,7 +18,8 @@ type GamePhase =
   | { name: 'loading' }
   | { name: 'error'; message: string }
   | { name: 'info'; role: 'Chris' | 'Kelly'; publicUrl: string; privateUrl: string }
-  | { name: 'knowledge-check'; role: 'Chris' | 'Kelly' }
+  | { name: 'knowledge-check' }
+  | { name: 'prep-questions' }
 
 export default function Play() {
   const [searchParams] = useSearchParams()
@@ -26,21 +28,22 @@ export default function Play() {
   const devGameInstanceId = import.meta.env.DEV ? searchParams.get('_dev_game_instance_id') : null
 
   const [phase, setPhase] = useState<GamePhase>({ name: 'loading' })
+  // callArgs is session-level (constant after init); stored in a ref to avoid
+  // triggering re-renders and to be accessible in phase render branches.
+  const callArgsRef = useRef<CallArgs | null>(null)
 
   useEffect(() => {
     let cancelled = false
 
     const init = async () => {
-      type CallArgs =
-        | { token: string }
-        | { _test: { participant_id: string; game_instance_id: string } }
-
-      let callArgs: CallArgs
+      let resolvedCallArgs: CallArgs
 
       if (import.meta.env.DEV && devParticipantId && devGameInstanceId) {
-        callArgs = { _test: { participant_id: devParticipantId, game_instance_id: devGameInstanceId } }
+        resolvedCallArgs = {
+          _test: { participant_id: devParticipantId, game_instance_id: devGameInstanceId },
+        }
       } else if (token) {
-        callArgs = { token }
+        resolvedCallArgs = { token }
       } else {
         if (!cancelled) {
           setPhase({
@@ -51,10 +54,13 @@ export default function Play() {
         return
       }
 
+      // Capture before any awaits so all render branches can access it.
+      callArgsRef.current = resolvedCallArgs
+
       try {
-        const { role, customToken } = await assignRole(callArgs)
+        const { role, customToken } = await assignRole(resolvedCallArgs)
         await signInWithCustomToken(auth, customToken)
-        const { public_info_url, private_info_url } = await getInfoUrls(callArgs)
+        const { public_info_url, private_info_url } = await getInfoUrls(resolvedCallArgs)
 
         if (!cancelled) {
           setPhase({ name: 'info', role, publicUrl: public_info_url, privateUrl: private_info_url })
@@ -96,19 +102,30 @@ export default function Play() {
 
   if (phase.name === 'knowledge-check') {
     return (
-      <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto' }}>
-        <h1>Knowledge Check</h1>
+      <Phase1KnowledgeCheck
+        callArgs={callArgsRef.current!}
+        onComplete={() => setPhase({ name: 'prep-questions' })}
+      />
+    )
+  }
+
+  if (phase.name === 'prep-questions') {
+    return (
+      <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto', fontFamily: 'sans-serif' }}>
+        <p style={{ color: '#555', marginBottom: '0.25rem' }}>Preparation</p>
+        <h1 style={{ marginTop: 0 }}>Preparation questions</h1>
         <p>Coming in the next step.</p>
       </main>
     )
   }
 
+  // phase.name === 'info'
   return (
     <Phase1Info
       role={phase.role}
       publicUrl={phase.publicUrl}
       privateUrl={phase.privateUrl}
-      onContinue={() => setPhase({ name: 'knowledge-check', role: phase.role })}
+      onContinue={() => setPhase({ name: 'knowledge-check' })}
     />
   )
 }
