@@ -53,3 +53,6 @@ export const submitKnowledgeCheck = (args: CallArgs, answer: 'Chris' | 'Kelly') 
 
 export const completePrep = (args: CallArgs) =>
   callFunction<{ ok: boolean }>('completePrep', args)
+
+export const confirmReady = (args: CallArgs) =>
+  callFunction<{ ok: boolean }>('confirmReady', args)

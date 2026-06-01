@@ -9,6 +9,8 @@ import Phase1KnowledgeCheck from '../phases/Phase1KnowledgeCheck'
 import Phase1PrepQuestions from '../phases/Phase1PrepQuestions'
 import Phase1NameEntry from '../phases/Phase1NameEntry'
 import Phase1HoldForSync from '../phases/Phase1HoldForSync'
+import Phase2ConfirmationGate from '../phases/Phase2ConfirmationGate'
+import Phase2Placeholder from '../phases/Phase2Placeholder'
 
 /**
  * Entry point for classroom-launched (and emulator dev-mode) sessions.
@@ -26,6 +28,8 @@ type GamePhase =
   | { name: 'prep-questions' }
   | { name: 'name-entry' }
   | { name: 'hold-for-sync' }
+  | { name: 'confirmation-gate' }
+  | { name: 'phase2-placeholder' }
 
 type SessionInfo = { participantId: string; gameInstanceId: string }
 
@@ -71,13 +75,16 @@ export default function Play() {
 
         await signInWithCustomToken(auth, customToken)
 
-        // Resume check: if prep is already complete, skip straight to the hold
-        // screen without re-running the info/knowledge-check/prep flow.
+        // Resume routing: skip the prep flow for anyone who finished prep.
+        // Also skip the confirmation gate for anyone who already confirmed.
         const participantSnap = await getDoc(
           doc(db, 'game_instances', game_instance_id, 'participants', participant_id),
         )
         if (participantSnap.data()?.prep_status === 'complete') {
-          if (!cancelled) setPhase({ name: 'hold-for-sync' })
+          const alreadyConfirmed = participantSnap.data()?.confirmed_ready_at != null
+          if (!cancelled) {
+            setPhase({ name: alreadyConfirmed ? 'phase2-placeholder' : 'hold-for-sync' })
+          }
           return
         }
 
@@ -153,7 +160,26 @@ export default function Play() {
   }
 
   if (phase.name === 'hold-for-sync') {
-    return <Phase1HoldForSync callArgs={callArgsRef.current!} />
+    return (
+      <Phase1HoldForSync
+        callArgs={callArgsRef.current!}
+        onAdvanceToPhase2={() => setPhase({ name: 'confirmation-gate' })}
+      />
+    )
+  }
+
+  if (phase.name === 'confirmation-gate') {
+    return (
+      <Phase2ConfirmationGate
+        callArgs={callArgsRef.current!}
+        onConfirm={() => setPhase({ name: 'phase2-placeholder' })}
+        onCancel={() => setPhase({ name: 'hold-for-sync' })}
+      />
+    )
+  }
+
+  if (phase.name === 'phase2-placeholder') {
+    return <Phase2Placeholder />
   }
 
   // phase.name === 'info'

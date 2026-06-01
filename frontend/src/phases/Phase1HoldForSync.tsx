@@ -3,9 +3,10 @@ import { type CallArgs, completePrep } from '../api'
 
 type Props = {
   callArgs: CallArgs
+  onAdvanceToPhase2: () => void
 }
 
-export default function Phase1HoldForSync({ callArgs }: Props) {
+export default function Phase1HoldForSync({ callArgs, onAdvanceToPhase2 }: Props) {
   useEffect(() => {
     // Mark prep complete on the server. Idempotent — safe to call on every mount.
     void completePrep(callArgs).catch((err: unknown) => {
@@ -27,9 +28,12 @@ export default function Phase1HoldForSync({ callArgs }: Props) {
         When class begins and your instructor starts the session, you&apos;ll see who
         you&apos;ve been matched with.
       </p>
-      <p style={{ color: '#555' }}>
+      <p style={{ color: '#555', marginBottom: '1.75rem' }}>
         You can close this tab and come back later — your work has been saved.
       </p>
+      <button onClick={onAdvanceToPhase2}>
+        I&apos;m in class — continue
+      </button>
     </main>
   )
 }
