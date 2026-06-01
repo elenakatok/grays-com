@@ -6,6 +6,7 @@ import { type CallArgs, assignRole, getInfoUrls } from '../api'
 import Phase1Info from '../phases/Phase1Info'
 import Phase1KnowledgeCheck from '../phases/Phase1KnowledgeCheck'
 import Phase1PrepQuestions from '../phases/Phase1PrepQuestions'
+import Phase1NameEntry from '../phases/Phase1NameEntry'
 
 /**
  * Entry point for classroom-launched (and emulator dev-mode) sessions.
@@ -22,6 +23,7 @@ type GamePhase =
   | { name: 'knowledge-check' }
   | { name: 'prep-questions' }
   | { name: 'name-entry' }
+  | { name: 'hold-for-sync' }
 
 type SessionInfo = { participantId: string; gameInstanceId: string }
 
@@ -127,10 +129,21 @@ export default function Play() {
   }
 
   if (phase.name === 'name-entry') {
+    const { participantId, gameInstanceId } = sessionRef.current!
+    return (
+      <Phase1NameEntry
+        participantId={participantId}
+        gameInstanceId={gameInstanceId}
+        onComplete={() => setPhase({ name: 'hold-for-sync' })}
+      />
+    )
+  }
+
+  if (phase.name === 'hold-for-sync') {
     return (
       <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto', fontFamily: 'sans-serif' }}>
-        <p style={{ color: '#555', marginBottom: '0.25rem' }}>Step 6 of 7</p>
-        <h1 style={{ marginTop: 0 }}>Your name</h1>
+        <p style={{ color: '#555', marginBottom: '0.25rem' }}>Step 7 of 7</p>
+        <h1 style={{ marginTop: 0 }}>Preparation complete</h1>
         <p>Coming in the next step.</p>
       </main>
     )

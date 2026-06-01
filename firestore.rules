@@ -6,7 +6,7 @@ service cloud.firestore {
       // Students can read their own record.
       allow read: if request.auth != null && request.auth.uid == participantId;
 
-      // Students can update only their own prep answer fields.
+      // Students can update only their own prep answer fields and display_name.
       // affectedKeys().hasOnly(...) ensures no other field (role, score,
       // group_id, etc.) can be changed by a direct client write.
       // create and delete are not covered by any rule, so they remain denied.
@@ -15,7 +15,7 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['prep_first_topic', 'prep_estimated_other_price',
                        'prep_question_for_other', 'prep_planned_first_offer',
-                       'prep_planned_offer_reason']);
+                       'prep_planned_offer_reason', 'display_name']);
     }
 
     // role_counts is an internal balancing counter — backend only.
