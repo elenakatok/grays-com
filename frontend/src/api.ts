@@ -79,3 +79,43 @@ export const triggerMatching = (args: InstructorDevArgs) =>
     'triggerMatching',
     args,
   )
+
+// ── Outcome reporting ──────────────────────────────────────────────────────
+
+export type GroupStatusResult = {
+  group_id: string
+  status: 'matched' | 'reporting' | 'completed' | 'deadlocked'
+  disagree_count: number
+  lead_outcome: { price: number | null; no_deal: boolean } | null
+  confirmations: Record<string, 'pending' | 'confirmed' | 'disagreed'>
+  agreement_reached: boolean | null
+  final_price: number | null
+  instructor_override: boolean
+  chris_participants: string[]
+  kelly_participants: string[]
+  lead_participant_id: string
+}
+
+/** Lead reports price (number) or no-deal (null). */
+export const submitLeadOutcome = (args: CallArgs, price: number | null) =>
+  callFunction<{ ok: boolean }>('submitLeadOutcome', { ...args, price })
+
+/** Non-lead confirms (true) or disagrees (false) with lead's report. */
+export const submitConfirmation = (args: CallArgs, confirmed: boolean) =>
+  callFunction<{ ok: boolean; outcome: string }>('submitConfirmation', { ...args, confirmed })
+
+/** Instructor manually settles a deadlocked group. */
+export const submitInstructorOutcome = (
+  args: InstructorDevArgs,
+  groupId: string,
+  price: number | null,
+) =>
+  callFunction<{ ok: boolean }>('submitInstructorOutcome', {
+    ...args,
+    group_id: groupId,
+    price,
+  })
+
+/** Returns all groups with current status — for the instructor dashboard. */
+export const getGroupStatuses = (args: InstructorDevArgs) =>
+  callFunction<{ ok: boolean; groups: GroupStatusResult[] }>('getGroupStatuses', args)

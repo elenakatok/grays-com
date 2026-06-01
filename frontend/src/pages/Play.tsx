@@ -4,6 +4,8 @@ import { signInWithCustomToken } from 'firebase/auth'
 import { doc, getDoc } from 'firebase/firestore'
 import { auth, db } from '../firebase'
 import { type CallArgs, assignRole, getInfoUrls } from '../api'
+import Phase2OutcomeReporting from '../phases/Phase2OutcomeReporting'
+import Phase2Results from '../phases/Phase2Results'
 import Phase1Info from '../phases/Phase1Info'
 import Phase1KnowledgeCheck from '../phases/Phase1KnowledgeCheck'
 import Phase1PrepQuestions from '../phases/Phase1PrepQuestions'
@@ -14,7 +16,6 @@ import Phase2AttendanceCode from '../phases/Phase2AttendanceCode'
 import Phase2WaitingRoom from '../phases/Phase2WaitingRoom'
 import Phase2GroupReveal from '../phases/Phase2GroupReveal'
 import Phase2OffPlatformHolding from '../phases/Phase2OffPlatformHolding'
-import Phase2OutcomePlaceholder from '../phases/Phase2OutcomePlaceholder'
 
 /**
  * Entry point for classroom-launched (and emulator dev-mode) sessions.
@@ -36,14 +37,16 @@ type GamePhase =
   | { name: 'attendance-code' }
   | { name: 'waiting-room'; participantId: string; gameInstanceId: string; displayName: string; role: 'Chris' | 'Kelly' }
   | { name: 'group-reveal'; groupId: string; participantId: string; gameInstanceId: string; displayName: string; role: 'Chris' | 'Kelly' }
-  | { name: 'off-platform-holding' }
-  | { name: 'outcome-placeholder' }
+  | { name: 'off-platform-holding'; groupId: string; isLead: boolean }
+  | { name: 'outcome-reporting'; groupId: string; participantId: string; gameInstanceId: string; isLead: boolean }
+  | { name: 'results'; groupId: string; gameInstanceId: string }
 
 type SessionInfo = {
   participantId: string
   gameInstanceId: string
   displayName: string
   role: 'Chris' | 'Kelly'
+  isLead: boolean
 }
 
 export default function Play() {
@@ -84,12 +87,13 @@ export default function Play() {
       try {
         const { role, customToken, participant_id, game_instance_id } =
           await assignRole(resolvedCallArgs)
-        // Initialise with role from assignRole; displayName filled in below once Firestore is read.
+        // Initialise with role from assignRole; displayName and isLead filled after Firestore read.
         sessionRef.current = {
           participantId: participant_id,
           gameInstanceId: game_instance_id,
           role,
           displayName: '',
+          isLead: false,
         }
 
         await signInWithCustomToken(auth, customToken)
@@ -99,9 +103,8 @@ export default function Play() {
           doc(db, 'game_instances', game_instance_id, 'participants', participant_id),
         )
         const pdata = participantSnap.data()
-        if (pdata?.display_name) {
-          sessionRef.current.displayName = pdata.display_name as string
-        }
+        if (pdata?.display_name) sessionRef.current.displayName = pdata.display_name as string
+        if (pdata?.is_lead != null) sessionRef.current.isLead = Boolean(pdata.is_lead)
 
         if (pdata?.prep_status === 'complete') {
           const confirmedReady = pdata.confirmed_ready_at != null
@@ -109,14 +112,35 @@ export default function Play() {
           if (!cancelled) {
             if (attendanceDone) {
               if (pdata.group_id) {
-                setPhase({
-                  name: 'group-reveal',
-                  groupId: pdata.group_id as string,
-                  participantId: participant_id,
-                  gameInstanceId: game_instance_id,
-                  displayName: sessionRef.current.displayName,
-                  role,
-                })
+                // Read group status to determine the correct resume phase.
+                const groupSnap = await getDoc(
+                  doc(db, 'game_instances', game_instance_id, 'groups', pdata.group_id as string),
+                )
+                const gdata = groupSnap.data()
+                const groupStatus = gdata?.status as string | undefined
+                if (!cancelled) {
+                  if (groupStatus === 'completed') {
+                    setPhase({ name: 'results', groupId: pdata.group_id as string, gameInstanceId: game_instance_id })
+                  } else if (groupStatus === 'reporting' || groupStatus === 'deadlocked') {
+                    setPhase({
+                      name: 'outcome-reporting',
+                      groupId: pdata.group_id as string,
+                      participantId: participant_id,
+                      gameInstanceId: game_instance_id,
+                      isLead: sessionRef.current.isLead,
+                    })
+                  } else {
+                    // 'matched' or unknown — show group reveal
+                    setPhase({
+                      name: 'group-reveal',
+                      groupId: pdata.group_id as string,
+                      participantId: participant_id,
+                      gameInstanceId: game_instance_id,
+                      displayName: sessionRef.current.displayName,
+                      role,
+                    })
+                  }
+                }
               } else {
                 setPhase({
                   name: 'waiting-room',
@@ -264,7 +288,13 @@ export default function Play() {
         groupId={phase.groupId}
         participantId={phase.participantId}
         gameInstanceId={phase.gameInstanceId}
-        onContinue={() => setPhase({ name: 'off-platform-holding' })}
+        onContinue={() =>
+          setPhase({
+            name: 'off-platform-holding',
+            groupId: phase.groupId,
+            isLead: sessionRef.current!.isLead,
+          })
+        }
       />
     )
   }
@@ -272,13 +302,40 @@ export default function Play() {
   if (phase.name === 'off-platform-holding') {
     return (
       <Phase2OffPlatformHolding
-        onReportOutcome={() => setPhase({ name: 'outcome-placeholder' })}
+        onReportOutcome={() =>
+          setPhase({
+            name: 'outcome-reporting',
+            groupId: phase.groupId,
+            participantId: sessionRef.current!.participantId,
+            gameInstanceId: sessionRef.current!.gameInstanceId,
+            isLead: phase.isLead,
+          })
+        }
       />
     )
   }
 
-  if (phase.name === 'outcome-placeholder') {
-    return <Phase2OutcomePlaceholder />
+  if (phase.name === 'outcome-reporting') {
+    return (
+      <Phase2OutcomeReporting
+        groupId={phase.groupId}
+        participantId={phase.participantId}
+        gameInstanceId={phase.gameInstanceId}
+        isLead={phase.isLead}
+        callArgs={callArgsRef.current!}
+        onComplete={() =>
+          setPhase({
+            name: 'results',
+            groupId: phase.groupId,
+            gameInstanceId: phase.gameInstanceId,
+          })
+        }
+      />
+    )
+  }
+
+  if (phase.name === 'results') {
+    return <Phase2Results groupId={phase.groupId} gameInstanceId={phase.gameInstanceId} />
   }
 
   // phase.name === 'info'

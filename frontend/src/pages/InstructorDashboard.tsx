@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ref, onValue } from 'firebase/database'
 import {
   generateAttendanceCode,
   triggerMatching,
+  getGroupStatuses,
+  submitInstructorOutcome,
   type InstructorDevArgs,
   type MatchGroupResult,
+  type GroupStatusResult,
 } from '../api'
 import { rtdb } from '../firebase'
 
@@ -87,13 +90,79 @@ export default function InstructorDashboard() {
   const [matching, setMatching] = useState(false)
   const [matchError, setMatchError] = useState<string | null>(null)
 
+  // ── Group statuses (post-match) ───────────────────────────────────
+  const [groupStatuses, setGroupStatuses] = useState<GroupStatusResult[] | null>(null)
+  const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const loadGroupStatuses = (instanceId: string) => {
+    const args: InstructorDevArgs = { _dev: { game_instance_id: instanceId } }
+    getGroupStatuses(args)
+      .then((r) => setGroupStatuses(r.groups.length > 0 ? r.groups : null))
+      .catch(() => {/* silently ignore refresh errors */})
+  }
+
+  // On mount: check if groups already exist
+  useEffect(() => {
+    if (!devGameInstanceId) return
+    loadGroupStatuses(devGameInstanceId)
+  }, [devGameInstanceId])
+
+  // Auto-refresh every 8s while any group is in 'reporting' or 'deadlocked' state
+  useEffect(() => {
+    if (!devGameInstanceId || !groupStatuses) return
+    const needsRefresh = groupStatuses.some(
+      (g) => g.status === 'reporting' || g.status === 'deadlocked',
+    )
+    if (needsRefresh) {
+      refreshIntervalRef.current = setInterval(() => loadGroupStatuses(devGameInstanceId), 8_000)
+    }
+    return () => {
+      if (refreshIntervalRef.current) clearInterval(refreshIntervalRef.current)
+    }
+  }, [devGameInstanceId, groupStatuses])
+
+  // ── Deadlock resolution ───────────────────────────────────────────
+  const [deadlockInputs, setDeadlockInputs] = useState<Record<string, string>>({})
+  const [deadlockSubmitting, setDeadlockSubmitting] = useState<Record<string, boolean>>({})
+  const [deadlockErrors, setDeadlockErrors] = useState<Record<string, string>>({})
+
+  const handleInstructorOutcome = (groupId: string, priceStr: string | null) => {
+    if (!devGameInstanceId) return
+    const price = priceStr === null ? null : parseFloat(priceStr.replace(/[,$\s]/g, ''))
+    if (priceStr !== null && (isNaN(price!) || price! <= 0)) {
+      setDeadlockErrors((prev) => ({ ...prev, [groupId]: 'Enter a valid price, or use No deal.' }))
+      return
+    }
+    setDeadlockSubmitting((prev) => ({ ...prev, [groupId]: true }))
+    setDeadlockErrors((prev) => ({ ...prev, [groupId]: '' }))
+    const args: InstructorDevArgs = { _dev: { game_instance_id: devGameInstanceId } }
+    submitInstructorOutcome(args, groupId, price!)
+      .then(() => {
+        setDeadlockSubmitting((prev) => ({ ...prev, [groupId]: false }))
+        loadGroupStatuses(devGameInstanceId)
+      })
+      .catch((err: unknown) => {
+        setDeadlockErrors((prev) => ({
+          ...prev,
+          [groupId]: err instanceof Error ? err.message : 'Failed.',
+        }))
+        setDeadlockSubmitting((prev) => ({ ...prev, [groupId]: false }))
+      })
+  }
+
   const activeChrisCount = Object.entries(attending).filter(
     ([pid, info]) => info.role === 'Chris' && presenceStatus(presence[pid]) !== 'disconnected',
   ).length
   const activeKellyCount = Object.entries(attending).filter(
     ([pid, info]) => info.role === 'Kelly' && presenceStatus(presence[pid]) !== 'disconnected',
   ).length
-  const canMatch = devGameInstanceId != null && activeChrisCount >= 1 && activeKellyCount >= 1
+  // Only show Match Now if no groups exist yet
+  const alreadyMatched = groupStatuses != null && groupStatuses.length > 0
+  const canMatch =
+    devGameInstanceId != null &&
+    !alreadyMatched &&
+    activeChrisCount >= 1 &&
+    activeKellyCount >= 1
 
   const handleMatch = () => {
     if (!devGameInstanceId) return
@@ -104,6 +173,7 @@ export default function InstructorDashboard() {
       .then((result) => {
         setGroups(result.groups)
         setMatching(false)
+        loadGroupStatuses(devGameInstanceId)
       })
       .catch((err: unknown) => {
         setMatchError(err instanceof Error ? err.message : 'Matching failed.')
@@ -226,7 +296,9 @@ export default function InstructorDashboard() {
           Match Now
         </h2>
 
-        {groups == null ? (
+        {alreadyMatched ? (
+          <p style={{ color: '#555' }}>Matching complete — see Groups below.</p>
+        ) : (
           <div>
             <p style={{ color: '#555', marginBottom: '1rem' }}>
               {activeChrisCount} Chris{activeChrisCount !== 1 ? 'es' : ''} +{' '}
@@ -249,10 +321,125 @@ export default function InstructorDashboard() {
               <p style={{ color: '#c00', marginTop: '0.75rem' }}>{matchError}</p>
             )}
           </div>
-        ) : (
-          <GroupsDisplay groups={groups} attending={attending} />
         )}
       </section>
+
+      {/* ── Groups ────────────────────────────────────────────────── */}
+      {groupStatuses != null && groupStatuses.length > 0 && (
+        <section style={{ marginTop: '2.5rem', maxWidth: '800px' }}>
+          <h2 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem' }}>
+            Groups
+          </h2>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {groupStatuses.map((g, i) => {
+              const nameFn = (pid: string) =>
+                attending[pid]?.display_name ?? pid.slice(0, 8) + '…'
+              const chrisLabels = g.chris_participants.map((pid) =>
+                `${nameFn(pid)} (Chris${pid === g.lead_participant_id ? ', lead' : ''})`,
+              )
+              const kellyLabels = g.kelly_participants.map((pid) => `${nameFn(pid)} (Kelly)`)
+              const members = [...chrisLabels, ...kellyLabels].join(' + ')
+
+              const statusLabel: Record<string, string> = {
+                matched: 'Waiting to report',
+                reporting: 'Reporting…',
+                completed: g.agreement_reached
+                  ? `Deal at ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(g.final_price!)}`
+                  : 'No deal',
+                deadlocked: '⚠️ Needs attention',
+              }
+
+              return (
+                <li
+                  key={g.group_id}
+                  style={{
+                    padding: '0.75rem 0',
+                    borderBottom: '1px solid #f0f0f0',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: '0.25rem',
+                    }}
+                  >
+                    <span>
+                      <strong>Group {i + 1}:</strong> {members}
+                    </span>
+                    <span
+                      style={{
+                        color: g.status === 'completed' ? '#2a7' : g.status === 'deadlocked' ? '#c00' : '#555',
+                        fontSize: '0.9rem',
+                      }}
+                    >
+                      {statusLabel[g.status] ?? g.status}
+                      {g.status === 'reporting' && ` (round ${(g.disagree_count ?? 0) + 1})`}
+                    </span>
+                  </div>
+
+                  {/* Deadlock resolution form */}
+                  {g.status === 'deadlocked' && (
+                    <div
+                      style={{
+                        marginTop: '0.75rem',
+                        padding: '0.75rem',
+                        background: '#fff8f0',
+                        border: '1px solid #f5c6a0',
+                        borderRadius: 4,
+                      }}
+                    >
+                      <p
+                        style={{
+                          margin: '0 0 0.5rem',
+                          fontSize: '0.9rem',
+                          fontWeight: 500,
+                        }}
+                      >
+                        Enter outcome manually:
+                      </p>
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="Price (e.g. 287500)"
+                          value={deadlockInputs[g.group_id] ?? ''}
+                          onChange={(e) =>
+                            setDeadlockInputs((prev) => ({ ...prev, [g.group_id]: e.target.value }))
+                          }
+                          style={{ fontSize: '1rem', padding: '0.35rem 0.5rem', width: '10rem' }}
+                          disabled={deadlockSubmitting[g.group_id]}
+                        />
+                        <button
+                          onClick={() =>
+                            handleInstructorOutcome(g.group_id, deadlockInputs[g.group_id] ?? '')
+                          }
+                          disabled={deadlockSubmitting[g.group_id] || !deadlockInputs[g.group_id]}
+                        >
+                          {deadlockSubmitting[g.group_id] ? '…' : 'Lock deal'}
+                        </button>
+                        <button
+                          onClick={() => handleInstructorOutcome(g.group_id, null)}
+                          disabled={deadlockSubmitting[g.group_id]}
+                          style={{ background: 'none', border: '1px solid #ccc' }}
+                        >
+                          No deal
+                        </button>
+                      </div>
+                      {deadlockErrors[g.group_id] && (
+                        <p style={{ color: '#c00', fontSize: '0.875rem', marginTop: '0.35rem' }}>
+                          {deadlockErrors[g.group_id]}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
     </main>
   )
 }

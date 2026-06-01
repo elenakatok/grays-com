@@ -599,6 +599,311 @@ export const triggerMatching = onRequest(async (req, res) => {
   }
 })
 
+// ── Instructor helpers ────────────────────────────────────────────────────────
+
+function extractInstructorGameId(
+  body: Record<string, unknown>,
+  isEmulator: boolean,
+  res: { status: (c: number) => { json: (d: object) => void } },
+): string | null {
+  if (isEmulator && body._dev != null) {
+    const dev = body._dev as Record<string, unknown>
+    if (typeof dev.game_instance_id !== 'string') {
+      res.status(400).json({ error: '_dev requires game_instance_id' })
+      return null
+    }
+    return dev.game_instance_id
+  }
+  if (typeof body.token !== 'string') {
+    res.status(400).json({ error: 'Missing token' })
+    return null
+  }
+  let payload: ClassroomTokenPayload
+  try {
+    payload = verifyClassroomToken(body.token)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Invalid token'
+    res.status(401).json({ error: message })
+    return null
+  }
+  if (payload.role !== 'instructor') {
+    res.status(403).json({ error: 'Instructor access required' })
+    return null
+  }
+  return payload.game_instance_id
+}
+
+function extractStudentIds(
+  body: Record<string, unknown>,
+  isEmulator: boolean,
+  res: { status: (c: number) => { json: (d: object) => void } },
+): { participantId: string; gameInstanceId: string } | null {
+  if (isEmulator && body._test != null) {
+    const test = body._test as Record<string, unknown>
+    if (typeof test.participant_id !== 'string' || typeof test.game_instance_id !== 'string') {
+      res.status(400).json({ error: '_test requires participant_id and game_instance_id strings' })
+      return null
+    }
+    return { participantId: test.participant_id, gameInstanceId: test.game_instance_id }
+  }
+  if (typeof body.token !== 'string') {
+    res.status(400).json({ error: 'Missing token' })
+    return null
+  }
+  let payload: ClassroomTokenPayload
+  try {
+    payload = verifyClassroomToken(body.token)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Invalid token'
+    res.status(401).json({ error: message })
+    return null
+  }
+  return { participantId: payload.participant_id, gameInstanceId: payload.game_instance_id }
+}
+
+// ── Outcome reporting ─────────────────────────────────────────────────────────
+
+/**
+ * Lead reports the group's outcome: a price (agreement) or null (no deal).
+ * Initialises non-lead confirmations to 'pending' and marks group 'reporting'.
+ * Idempotent guard: returns 400 if lead already submitted for this round.
+ *
+ * Request body: { token | _test, price: number | null }
+ */
+export const submitLeadOutcome = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const ids = extractStudentIds(body, isEmulator, res)
+  if (!ids) return
+  const { participantId, gameInstanceId } = ids
+
+  const price = body.price as number | null | undefined
+  if (price !== null && price !== undefined && (typeof price !== 'number' || price < 0 || !isFinite(price))) {
+    res.status(400).json({ error: 'price must be a non-negative number, or null for no deal' })
+    return
+  }
+  const finalPrice: number | null = price == null ? null : Math.round(price)
+
+  try {
+    const db = admin.firestore()
+    const pSnap = await db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('participants').doc(participantId).get()
+    if (!pSnap.exists) { res.status(404).json({ error: 'Participant not found.' }); return }
+    const pdata = pSnap.data()!
+    if (!pdata.group_id) { res.status(400).json({ error: 'Not in a group.' }); return }
+    if (!pdata.is_lead) { res.status(403).json({ error: 'Only the lead can report the outcome.' }); return }
+
+    const groupRef = db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('groups').doc(pdata.group_id as string)
+    const gSnap = await groupRef.get()
+    const gdata = gSnap.data()!
+
+    if (gdata.status === 'completed') { res.status(400).json({ error: 'Outcome already locked.' }); return }
+    if (gdata.status === 'deadlocked') { res.status(400).json({ error: 'Group is deadlocked — awaiting instructor.' }); return }
+    if (gdata.status === 'reporting' && gdata.lead_outcome != null) {
+      res.status(400).json({ error: 'Already submitted this round. Waiting for group to review.' }); return
+    }
+
+    const allPids = [
+      ...(gdata.chris_participants as string[]),
+      ...(gdata.kelly_participants as string[]),
+    ]
+    const confirmations: Record<string, string> = {}
+    for (const pid of allPids) {
+      if (pid !== gdata.lead_participant_id) confirmations[pid] = 'pending'
+    }
+
+    await groupRef.update({
+      status: 'reporting',
+      lead_outcome: { price: finalPrice, no_deal: finalPrice === null },
+      lead_reported_at: FieldValue.serverTimestamp(),
+      confirmations,
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('submitLeadOutcome error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+/**
+ * Non-lead confirms or disagrees with the lead's reported outcome.
+ * On agreement: if all non-leads confirmed → lock outcome.
+ * On disagreement: increment disagree_count; if ≥3 → deadlock; else reset for next round.
+ *
+ * Request body: { token | _test, confirmed: boolean }
+ */
+export const submitConfirmation = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const ids = extractStudentIds(body, isEmulator, res)
+  if (!ids) return
+  const { participantId, gameInstanceId } = ids
+
+  if (typeof body.confirmed !== 'boolean') {
+    res.status(400).json({ error: 'confirmed must be boolean' }); return
+  }
+  const confirmed = body.confirmed as boolean
+
+  try {
+    const db = admin.firestore()
+    const pSnap = await db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('participants').doc(participantId).get()
+    if (!pSnap.exists) { res.status(404).json({ error: 'Participant not found.' }); return }
+    const pdata = pSnap.data()!
+    if (!pdata.group_id) { res.status(400).json({ error: 'Not in a group.' }); return }
+    if (pdata.is_lead) { res.status(403).json({ error: 'Lead uses submitLeadOutcome.' }); return }
+
+    const groupRef = db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('groups').doc(pdata.group_id as string)
+
+    let outcome = 'waiting'
+    await db.runTransaction(async (tx) => {
+      const gSnap = await tx.get(groupRef)
+      const gdata = gSnap.data()!
+
+      if (gdata.status !== 'reporting') {
+        throw Object.assign(new Error(`Cannot confirm — group is '${gdata.status}'.`), { status: 400 })
+      }
+      if (gdata.lead_outcome == null) {
+        throw Object.assign(new Error('Lead has not reported yet.'), { status: 400 })
+      }
+      const currentConf = (gdata.confirmations ?? {})[participantId]
+      if (currentConf !== 'pending') {
+        throw Object.assign(new Error('You have already responded this round.'), { status: 400 })
+      }
+
+      if (!confirmed) {
+        const disagreeCount = (gdata.disagree_count ?? 0) + 1
+        if (disagreeCount >= 3) {
+          tx.update(groupRef, {
+            status: 'deadlocked',
+            disagree_count: disagreeCount,
+            [`confirmations.${participantId}`]: 'disagreed',
+          })
+          outcome = 'deadlocked'
+        } else {
+          // Reset: clear lead_outcome, set all confirmations back to pending
+          const reset: Record<string, string> = {}
+          for (const pid of Object.keys(gdata.confirmations ?? {})) reset[pid] = 'pending'
+          tx.update(groupRef, {
+            disagree_count: disagreeCount,
+            lead_outcome: null,
+            lead_reported_at: null,
+            confirmations: reset,
+          })
+          outcome = 'disagreed'
+        }
+      } else {
+        const newConf = { ...(gdata.confirmations ?? {}), [participantId]: 'confirmed' }
+        const allConfirmed = Object.values(newConf).every((v) => v === 'confirmed')
+        if (allConfirmed) {
+          const lo = gdata.lead_outcome as { price: number | null; no_deal: boolean }
+          tx.update(groupRef, {
+            status: 'completed',
+            confirmations: newConf,
+            agreement_reached: !lo.no_deal,
+            final_price: lo.price,
+            completed_at: FieldValue.serverTimestamp(),
+          })
+          outcome = 'locked'
+        } else {
+          tx.update(groupRef, { [`confirmations.${participantId}`]: 'confirmed' })
+          outcome = 'waiting'
+        }
+      }
+    })
+    res.json({ ok: true, outcome })
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    const message = err instanceof Error ? err.message : 'Internal error'
+    res.status(status).json({ error: message })
+  }
+})
+
+/**
+ * Instructor manually enters the outcome for a deadlocked group.
+ * Overrides the group's reporting state and locks the outcome directly.
+ *
+ * Request body (emulator): { _dev: { game_instance_id }, group_id, price: number | null }
+ */
+export const submitInstructorOutcome = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  if (!gameInstanceId) return
+
+  const { group_id, price } = body as { group_id?: string; price?: number | null }
+  if (typeof group_id !== 'string') { res.status(400).json({ error: 'group_id required' }); return }
+  const finalPrice: number | null = price == null ? null : Math.round(price)
+
+  try {
+    const db = admin.firestore()
+    await db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('groups').doc(group_id)
+      .update({
+        status: 'completed',
+        agreement_reached: finalPrice !== null,
+        final_price: finalPrice,
+        completed_at: FieldValue.serverTimestamp(),
+        instructor_override: true,
+      })
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('submitInstructorOutcome error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+/**
+ * Returns all groups for a game instance with their current status and outcome.
+ * Used by the instructor dashboard to monitor progress and spot deadlocked groups.
+ *
+ * Request body (emulator): { _dev: { game_instance_id } }
+ */
+export const getGroupStatuses = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  if (!gameInstanceId) return
+
+  try {
+    const db = admin.firestore()
+    const snap = await db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('groups').get()
+    const groups = snap.docs.map((d) => {
+      const g = d.data()
+      return {
+        group_id: g.group_id as string,
+        status: g.status as string,
+        disagree_count: (g.disagree_count ?? 0) as number,
+        lead_outcome: (g.lead_outcome ?? null) as { price: number | null; no_deal: boolean } | null,
+        confirmations: (g.confirmations ?? {}) as Record<string, string>,
+        agreement_reached: (g.agreement_reached ?? null) as boolean | null,
+        final_price: (g.final_price ?? null) as number | null,
+        instructor_override: (g.instructor_override ?? false) as boolean,
+        chris_participants: g.chris_participants as string[],
+        kelly_participants: g.kelly_participants as string[],
+        lead_participant_id: g.lead_participant_id as string,
+      }
+    })
+    res.json({ ok: true, groups })
+  } catch (err) {
+    console.error('getGroupStatuses error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
 /**
  * Finalizes a game instance: computes z-scores and pushes updated results
  * to the classroom callback URL.
