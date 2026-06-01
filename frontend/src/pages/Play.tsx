@@ -12,7 +12,9 @@ import Phase1HoldForSync from '../phases/Phase1HoldForSync'
 import Phase2ConfirmationGate from '../phases/Phase2ConfirmationGate'
 import Phase2AttendanceCode from '../phases/Phase2AttendanceCode'
 import Phase2WaitingRoom from '../phases/Phase2WaitingRoom'
-import Phase2Matched from '../phases/Phase2Matched'
+import Phase2GroupReveal from '../phases/Phase2GroupReveal'
+import Phase2OffPlatformHolding from '../phases/Phase2OffPlatformHolding'
+import Phase2OutcomePlaceholder from '../phases/Phase2OutcomePlaceholder'
 
 /**
  * Entry point for classroom-launched (and emulator dev-mode) sessions.
@@ -33,7 +35,9 @@ type GamePhase =
   | { name: 'confirmation-gate' }
   | { name: 'attendance-code' }
   | { name: 'waiting-room'; participantId: string; gameInstanceId: string; displayName: string; role: 'Chris' | 'Kelly' }
-  | { name: 'matched'; displayName: string; role: 'Chris' | 'Kelly' }
+  | { name: 'group-reveal'; groupId: string; participantId: string; gameInstanceId: string; displayName: string; role: 'Chris' | 'Kelly' }
+  | { name: 'off-platform-holding' }
+  | { name: 'outcome-placeholder' }
 
 type SessionInfo = {
   participantId: string
@@ -105,7 +109,14 @@ export default function Play() {
           if (!cancelled) {
             if (attendanceDone) {
               if (pdata.group_id) {
-                setPhase({ name: 'matched', displayName: sessionRef.current.displayName, role })
+                setPhase({
+                  name: 'group-reveal',
+                  groupId: pdata.group_id as string,
+                  participantId: participant_id,
+                  gameInstanceId: game_instance_id,
+                  displayName: sessionRef.current.displayName,
+                  role,
+                })
               } else {
                 setPhase({
                   name: 'waiting-room',
@@ -227,20 +238,47 @@ export default function Play() {
   }
 
   if (phase.name === 'waiting-room') {
-    const { displayName, role } = phase
     return (
       <Phase2WaitingRoom
         participantId={phase.participantId}
         gameInstanceId={phase.gameInstanceId}
         displayName={phase.displayName}
         role={phase.role}
-        onMatched={() => setPhase({ name: 'matched', displayName, role })}
+        onMatched={(groupId) =>
+          setPhase({
+            name: 'group-reveal',
+            groupId,
+            participantId: phase.participantId,
+            gameInstanceId: phase.gameInstanceId,
+            displayName: phase.displayName,
+            role: phase.role,
+          })
+        }
       />
     )
   }
 
-  if (phase.name === 'matched') {
-    return <Phase2Matched displayName={phase.displayName} role={phase.role} />
+  if (phase.name === 'group-reveal') {
+    return (
+      <Phase2GroupReveal
+        groupId={phase.groupId}
+        participantId={phase.participantId}
+        gameInstanceId={phase.gameInstanceId}
+        onContinue={() => setPhase({ name: 'off-platform-holding' })}
+      />
+    )
+  }
+
+  if (phase.name === 'off-platform-holding') {
+    return (
+      <Phase2OffPlatformHolding
+        onReportOutcome={() => setPhase({ name: 'outcome-placeholder' })}
+      />
+    )
+  }
+
+  if (phase.name === 'outcome-placeholder') {
+    return <Phase2OutcomePlaceholder />
   }
 
   // phase.name === 'info'
