@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { signInWithCustomToken } from 'firebase/auth'
-import { auth } from '../firebase'
+import { doc, getDoc } from 'firebase/firestore'
+import { auth, db } from '../firebase'
 import { type CallArgs, assignRole, getInfoUrls } from '../api'
 import Phase1Info from '../phases/Phase1Info'
 import Phase1KnowledgeCheck from '../phases/Phase1KnowledgeCheck'
 import Phase1PrepQuestions from '../phases/Phase1PrepQuestions'
 import Phase1NameEntry from '../phases/Phase1NameEntry'
+import Phase1HoldForSync from '../phases/Phase1HoldForSync'
 
 /**
  * Entry point for classroom-launched (and emulator dev-mode) sessions.
@@ -68,6 +70,17 @@ export default function Play() {
         sessionRef.current = { participantId: participant_id, gameInstanceId: game_instance_id }
 
         await signInWithCustomToken(auth, customToken)
+
+        // Resume check: if prep is already complete, skip straight to the hold
+        // screen without re-running the info/knowledge-check/prep flow.
+        const participantSnap = await getDoc(
+          doc(db, 'game_instances', game_instance_id, 'participants', participant_id),
+        )
+        if (participantSnap.data()?.prep_status === 'complete') {
+          if (!cancelled) setPhase({ name: 'hold-for-sync' })
+          return
+        }
+
         const { public_info_url, private_info_url } = await getInfoUrls(resolvedCallArgs)
 
         if (!cancelled) {
@@ -140,13 +153,7 @@ export default function Play() {
   }
 
   if (phase.name === 'hold-for-sync') {
-    return (
-      <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto', fontFamily: 'sans-serif' }}>
-        <p style={{ color: '#555', marginBottom: '0.25rem' }}>Step 7 of 7</p>
-        <h1 style={{ marginTop: 0 }}>Preparation complete</h1>
-        <p>Coming in the next step.</p>
-      </main>
-    )
+    return <Phase1HoldForSync callArgs={callArgsRef.current!} />
   }
 
   // phase.name === 'info'

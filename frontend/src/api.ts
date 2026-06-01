@@ -50,3 +50,6 @@ export const getInfoUrls = (args: CallArgs) =>
 
 export const submitKnowledgeCheck = (args: CallArgs, answer: 'Chris' | 'Kelly') =>
   callFunction<KnowledgeCheckResult>('submitKnowledgeCheck', { ...args, answer })
+
+export const completePrep = (args: CallArgs) =>
+  callFunction<{ ok: boolean }>('completePrep', args)

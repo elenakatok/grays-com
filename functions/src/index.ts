@@ -8,6 +8,7 @@ import { computeZScores } from './finalize'
 import { assignRole as doAssignRole } from './assignRole'
 import { getInfoUrlsForParticipant } from './getInfoUrls'
 import { scoreKnowledgeCheck } from './submitKnowledgeCheck'
+import { markPrepComplete } from './completePrep'
 
 admin.initializeApp()
 
@@ -190,6 +191,62 @@ export const submitKnowledgeCheck = onRequest(async (req, res) => {
   try {
     const result = await scoreKnowledgeCheck(gameInstanceId, participantId, answer)
     res.json({ ok: true, ...result })
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    const message = err instanceof Error ? err.message : 'Internal error'
+    res.status(status).json({ error: message })
+  }
+})
+
+/**
+ * Marks a participant's preparation phase as complete, setting prep_status
+ * and prep_completed_at. Idempotent: safe to call on every page load of the
+ * hold screen. Written via Admin SDK so clients cannot set these fields
+ * directly.
+ *
+ * Request body: { token | _test }
+ * Response: { ok: true }
+ */
+export const completePrep = onRequest(async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' })
+    return
+  }
+
+  const body = req.body as Record<string, unknown>
+  let participantId: string
+  let gameInstanceId: string
+
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+
+  if (isEmulator && body._test != null) {
+    const test = body._test as Record<string, unknown>
+    if (typeof test.participant_id !== 'string' || typeof test.game_instance_id !== 'string') {
+      res.status(400).json({ error: '_test requires participant_id and game_instance_id strings' })
+      return
+    }
+    participantId = test.participant_id
+    gameInstanceId = test.game_instance_id
+  } else {
+    if (typeof body.token !== 'string') {
+      res.status(400).json({ error: 'Missing token' })
+      return
+    }
+    let payload: ClassroomTokenPayload
+    try {
+      payload = verifyClassroomToken(body.token)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Invalid token'
+      res.status(401).json({ error: message })
+      return
+    }
+    participantId = payload.participant_id
+    gameInstanceId = payload.game_instance_id
+  }
+
+  try {
+    await markPrepComplete(gameInstanceId, participantId)
+    res.json({ ok: true })
   } catch (err) {
     const status = (err as { status?: number }).status ?? 500
     const message = err instanceof Error ? err.message : 'Internal error'
