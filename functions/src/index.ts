@@ -10,6 +10,7 @@ import { getInfoUrlsForParticipant } from './getInfoUrls'
 import { scoreKnowledgeCheck } from './submitKnowledgeCheck'
 import { markPrepComplete } from './completePrep'
 import { markReadyConfirmed } from './confirmReady'
+import { generateAttendanceCode as doGenerateCode, verifyAttendanceCode as doVerifyCode } from './attendanceCode'
 
 admin.initializeApp()
 
@@ -320,6 +321,121 @@ export const confirmReady = onRequest(async (req, res) => {
 
   try {
     await markReadyConfirmed(gameInstanceId, participantId)
+    res.json({ ok: true })
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    const message = err instanceof Error ? err.message : 'Internal error'
+    res.status(status).json({ error: message })
+  }
+})
+
+/**
+ * Generates a new attendance code for a game instance and stores it.
+ * Called by the instructor dashboard. Always overwrites any existing code.
+ *
+ * Request body (emulator): { _dev: { game_instance_id } }
+ * Request body (production): { token: "<instructor JWT>" }
+ * Response: { ok: true, code: "ABCDE" }
+ */
+export const generateAttendanceCode = onRequest(async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' })
+    return
+  }
+
+  const body = req.body as Record<string, unknown>
+  let gameInstanceId: string
+
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+
+  if (isEmulator && body._dev != null) {
+    const dev = body._dev as Record<string, unknown>
+    if (typeof dev.game_instance_id !== 'string') {
+      res.status(400).json({ error: '_dev requires game_instance_id' })
+      return
+    }
+    gameInstanceId = dev.game_instance_id
+  } else {
+    if (typeof body.token !== 'string') {
+      res.status(400).json({ error: 'Missing token' })
+      return
+    }
+    let payload: ClassroomTokenPayload
+    try {
+      payload = verifyClassroomToken(body.token)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Invalid token'
+      res.status(401).json({ error: message })
+      return
+    }
+    if (payload.role !== 'instructor') {
+      res.status(403).json({ error: 'Instructor access required' })
+      return
+    }
+    gameInstanceId = payload.game_instance_id
+  }
+
+  try {
+    const code = await doGenerateCode(gameInstanceId)
+    res.json({ ok: true, code })
+  } catch (err) {
+    console.error('generateAttendanceCode error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+/**
+ * Verifies a student-submitted attendance code. On match, writes
+ * attendance_confirmed_at to the participant record. Idempotent.
+ *
+ * Request body: { token | _test, code: "ABCDE" }
+ * Response: { ok: true }
+ */
+export const verifyAttendanceCode = onRequest(async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' })
+    return
+  }
+
+  const body = req.body as Record<string, unknown>
+  let participantId: string
+  let gameInstanceId: string
+
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+
+  if (isEmulator && body._test != null) {
+    const test = body._test as Record<string, unknown>
+    if (typeof test.participant_id !== 'string' || typeof test.game_instance_id !== 'string') {
+      res.status(400).json({ error: '_test requires participant_id and game_instance_id strings' })
+      return
+    }
+    participantId = test.participant_id
+    gameInstanceId = test.game_instance_id
+  } else {
+    if (typeof body.token !== 'string') {
+      res.status(400).json({ error: 'Missing token' })
+      return
+    }
+    let payload: ClassroomTokenPayload
+    try {
+      payload = verifyClassroomToken(body.token)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Invalid token'
+      res.status(401).json({ error: message })
+      return
+    }
+    participantId = payload.participant_id
+    gameInstanceId = payload.game_instance_id
+  }
+
+  const code = body.code
+  if (typeof code !== 'string' || code.trim().length === 0) {
+    res.status(400).json({ error: 'code is required' })
+    return
+  }
+
+  try {
+    await doVerifyCode(gameInstanceId, participantId, code)
     res.json({ ok: true })
   } catch (err) {
     const status = (err as { status?: number }).status ?? 500

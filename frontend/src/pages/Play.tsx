@@ -10,7 +10,8 @@ import Phase1PrepQuestions from '../phases/Phase1PrepQuestions'
 import Phase1NameEntry from '../phases/Phase1NameEntry'
 import Phase1HoldForSync from '../phases/Phase1HoldForSync'
 import Phase2ConfirmationGate from '../phases/Phase2ConfirmationGate'
-import Phase2Placeholder from '../phases/Phase2Placeholder'
+import Phase2AttendanceCode from '../phases/Phase2AttendanceCode'
+import Phase2WaitingRoomPlaceholder from '../phases/Phase2WaitingRoomPlaceholder'
 
 /**
  * Entry point for classroom-launched (and emulator dev-mode) sessions.
@@ -29,7 +30,8 @@ type GamePhase =
   | { name: 'name-entry' }
   | { name: 'hold-for-sync' }
   | { name: 'confirmation-gate' }
-  | { name: 'phase2-placeholder' }
+  | { name: 'attendance-code' }
+  | { name: 'waiting-room-placeholder' }
 
 type SessionInfo = { participantId: string; gameInstanceId: string }
 
@@ -75,15 +77,18 @@ export default function Play() {
 
         await signInWithCustomToken(auth, customToken)
 
-        // Resume routing: skip the prep flow for anyone who finished prep.
-        // Also skip the confirmation gate for anyone who already confirmed.
+        // Resume routing: skip already-completed steps on page reload.
         const participantSnap = await getDoc(
           doc(db, 'game_instances', game_instance_id, 'participants', participant_id),
         )
         if (participantSnap.data()?.prep_status === 'complete') {
-          const alreadyConfirmed = participantSnap.data()?.confirmed_ready_at != null
+          const pdata = participantSnap.data()!
+          const confirmedReady = pdata.confirmed_ready_at != null
+          const attendanceDone = pdata.attendance_confirmed_at != null
           if (!cancelled) {
-            setPhase({ name: alreadyConfirmed ? 'phase2-placeholder' : 'hold-for-sync' })
+            if (attendanceDone) setPhase({ name: 'waiting-room-placeholder' })
+            else if (confirmedReady) setPhase({ name: 'attendance-code' })
+            else setPhase({ name: 'hold-for-sync' })
           }
           return
         }
@@ -172,14 +177,23 @@ export default function Play() {
     return (
       <Phase2ConfirmationGate
         callArgs={callArgsRef.current!}
-        onConfirm={() => setPhase({ name: 'phase2-placeholder' })}
+        onConfirm={() => setPhase({ name: 'attendance-code' })}
         onCancel={() => setPhase({ name: 'hold-for-sync' })}
       />
     )
   }
 
-  if (phase.name === 'phase2-placeholder') {
-    return <Phase2Placeholder />
+  if (phase.name === 'attendance-code') {
+    return (
+      <Phase2AttendanceCode
+        callArgs={callArgsRef.current!}
+        onValid={() => setPhase({ name: 'waiting-room-placeholder' })}
+      />
+    )
+  }
+
+  if (phase.name === 'waiting-room-placeholder') {
+    return <Phase2WaitingRoomPlaceholder />
   }
 
   // phase.name === 'info'

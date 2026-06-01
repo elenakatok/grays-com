@@ -5,6 +5,8 @@ const FUNCTIONS_BASE = import.meta.env.DEV
 export type TestArgs = { _test: { participant_id: string; game_instance_id: string } }
 export type TokenArgs = { token: string }
 export type CallArgs = TokenArgs | TestArgs
+// Instructor-side args (no participant_id) — dev-mode only; production uses a token.
+export type InstructorDevArgs = { _dev: { game_instance_id: string } }
 
 async function callFunction<T>(name: string, body: object): Promise<T> {
   const res = await fetch(`${FUNCTIONS_BASE}/${name}`, {
@@ -56,3 +58,9 @@ export const completePrep = (args: CallArgs) =>
 
 export const confirmReady = (args: CallArgs) =>
   callFunction<{ ok: boolean }>('confirmReady', args)
+
+export const generateAttendanceCode = (args: InstructorDevArgs) =>
+  callFunction<{ ok: boolean; code: string }>('generateAttendanceCode', args)
+
+export const verifyAttendanceCode = (args: CallArgs, code: string) =>
+  callFunction<{ ok: boolean }>('verifyAttendanceCode', { ...args, code })
