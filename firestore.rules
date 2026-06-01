@@ -1,7 +1,23 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Locked down until real rules are implemented
+
+    // Students may read their own participant record (role, prep status, etc.).
+    // All writes go through Cloud Functions using the Admin SDK, which bypasses
+    // these rules entirely. Direct client writes are blocked.
+    // Future: when the prep questions form is built, add targeted write access
+    // for prep fields here (never for role, group_id, or outcome fields).
+    match /game_instances/{instanceId}/participants/{participantId} {
+      allow read: if request.auth != null && request.auth.uid == participantId;
+      allow write: if false;
+    }
+
+    // role_counts is an internal balancing counter — backend only.
+    match /game_instances/{instanceId}/role_counts/{doc} {
+      allow read, write: if false;
+    }
+
+    // Default deny for everything else.
     match /{document=**} {
       allow read, write: if false;
     }
