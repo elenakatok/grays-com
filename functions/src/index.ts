@@ -71,7 +71,7 @@ export const assignRole = onRequest(async (req, res) => {
     const customToken = await admin.auth().createCustomToken(participantId, {
       game_instance_id: gameInstanceId,
     })
-    res.json({ ok: true, role, customToken })
+    res.json({ ok: true, role, customToken, participant_id: participantId, game_instance_id: gameInstanceId })
   } catch (err) {
     console.error('assignRole error:', err)
     res.status(500).json({ error: 'Internal error' })

@@ -5,6 +5,7 @@ import { auth } from '../firebase'
 import { type CallArgs, assignRole, getInfoUrls } from '../api'
 import Phase1Info from '../phases/Phase1Info'
 import Phase1KnowledgeCheck from '../phases/Phase1KnowledgeCheck'
+import Phase1PrepQuestions from '../phases/Phase1PrepQuestions'
 
 /**
  * Entry point for classroom-launched (and emulator dev-mode) sessions.
@@ -20,6 +21,9 @@ type GamePhase =
   | { name: 'info'; role: 'Chris' | 'Kelly'; publicUrl: string; privateUrl: string }
   | { name: 'knowledge-check' }
   | { name: 'prep-questions' }
+  | { name: 'name-entry' }
+
+type SessionInfo = { participantId: string; gameInstanceId: string }
 
 export default function Play() {
   const [searchParams] = useSearchParams()
@@ -28,9 +32,9 @@ export default function Play() {
   const devGameInstanceId = import.meta.env.DEV ? searchParams.get('_dev_game_instance_id') : null
 
   const [phase, setPhase] = useState<GamePhase>({ name: 'loading' })
-  // callArgs is session-level (constant after init); stored in a ref to avoid
-  // triggering re-renders and to be accessible in phase render branches.
+  // Constant after init — stored in refs to avoid re-renders.
   const callArgsRef = useRef<CallArgs | null>(null)
+  const sessionRef = useRef<SessionInfo | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -54,11 +58,13 @@ export default function Play() {
         return
       }
 
-      // Capture before any awaits so all render branches can access it.
       callArgsRef.current = resolvedCallArgs
 
       try {
-        const { role, customToken } = await assignRole(resolvedCallArgs)
+        const { role, customToken, participant_id, game_instance_id } =
+          await assignRole(resolvedCallArgs)
+        sessionRef.current = { participantId: participant_id, gameInstanceId: game_instance_id }
+
         await signInWithCustomToken(auth, customToken)
         const { public_info_url, private_info_url } = await getInfoUrls(resolvedCallArgs)
 
@@ -110,10 +116,21 @@ export default function Play() {
   }
 
   if (phase.name === 'prep-questions') {
+    const { participantId, gameInstanceId } = sessionRef.current!
+    return (
+      <Phase1PrepQuestions
+        participantId={participantId}
+        gameInstanceId={gameInstanceId}
+        onComplete={() => setPhase({ name: 'name-entry' })}
+      />
+    )
+  }
+
+  if (phase.name === 'name-entry') {
     return (
       <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto', fontFamily: 'sans-serif' }}>
-        <p style={{ color: '#555', marginBottom: '0.25rem' }}>Preparation</p>
-        <h1 style={{ marginTop: 0 }}>Preparation questions</h1>
+        <p style={{ color: '#555', marginBottom: '0.25rem' }}>Step 6 of 7</p>
+        <h1 style={{ marginTop: 0 }}>Your name</h1>
         <p>Coming in the next step.</p>
       </main>
     )

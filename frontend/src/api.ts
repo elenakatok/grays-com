@@ -23,6 +23,8 @@ export type AssignRoleResult = {
   ok: boolean
   role: 'Chris' | 'Kelly'
   customToken: string
+  participant_id: string
+  game_instance_id: string
 }
 
 export type InfoUrlsResult = {

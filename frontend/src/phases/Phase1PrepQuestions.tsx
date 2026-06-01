@@ -1,0 +1,256 @@
+import { useEffect, useRef, useState } from 'react'
+import { doc, getDoc, updateDoc } from 'firebase/firestore'
+import { db } from '../firebase'
+
+type Props = {
+  participantId: string
+  gameInstanceId: string
+  onComplete: () => void
+}
+
+type Question = {
+  field: string
+  type: 'text' | 'number'
+  label: string
+  prompt: string
+  placeholder: string
+}
+
+const QUESTIONS: Question[] = [
+  {
+    field: 'prep_first_topic',
+    type: 'text',
+    label: 'Question 1 of 5',
+    prompt: 'When you sit down to talk, what is the first topic you will bring up with the other side?',
+    placeholder: '',
+  },
+  {
+    field: 'prep_estimated_other_price',
+    type: 'number',
+    label: 'Question 2 of 5',
+    prompt: "What is your best guess of the other side's walk-away value (reservation price)?",
+    placeholder: 'e.g. 250000',
+  },
+  {
+    field: 'prep_question_for_other',
+    type: 'text',
+    label: 'Question 3 of 5',
+    prompt: 'What question would you most like to ask the other side? Why?',
+    placeholder: '',
+  },
+  {
+    field: 'prep_planned_first_offer',
+    type: 'number',
+    label: 'Question 4 of 5',
+    prompt: 'Assuming you make the first offer, what number do you think you will put on the table? This is non-binding.',
+    placeholder: 'e.g. 300000',
+  },
+  {
+    field: 'prep_planned_offer_reason',
+    type: 'text',
+    label: 'Question 5 of 5',
+    prompt: 'What is the reason for the number you gave?',
+    placeholder: '',
+  },
+]
+
+export default function Phase1PrepQuestions({ participantId, gameInstanceId, onComplete }: Props) {
+  const [step, setStep] = useState(0)
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [loaded, setLoaded] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [validationError, setValidationError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  // Stable ref so the load effect doesn't re-run when onComplete identity changes.
+  const onCompleteRef = useRef(onComplete)
+  onCompleteRef.current = onComplete
+
+  useEffect(() => {
+    const load = async () => {
+      const snap = await getDoc(
+        doc(db, 'game_instances', gameInstanceId, 'participants', participantId),
+      )
+      const data = snap.data() ?? {}
+
+      const existing: Record<string, string> = {}
+      for (const q of QUESTIONS) {
+        if (data[q.field] != null) {
+          existing[q.field] = String(data[q.field])
+        }
+      }
+
+      const firstUnanswered = QUESTIONS.findIndex(
+        (q) => existing[q.field] == null || existing[q.field] === '',
+      )
+      if (firstUnanswered === -1) {
+        // All five already answered — skip straight to next step.
+        onCompleteRef.current()
+        return
+      }
+
+      setAnswers(existing)
+      setStep(firstUnanswered)
+      setLoaded(true)
+    }
+
+    void load()
+  }, [gameInstanceId, participantId])
+
+  if (!loaded) {
+    return (
+      <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto' }}>
+        <p>Loading…</p>
+      </main>
+    )
+  }
+
+  const question = QUESTIONS[step]
+  const currentValue = answers[question.field] ?? ''
+  const isLast = step === QUESTIONS.length - 1
+
+  const handleContinue = async () => {
+    const trimmed = currentValue.trim()
+    if (!trimmed) {
+      setValidationError('Please enter an answer before continuing.')
+      return
+    }
+
+    let valueToStore: string | number = trimmed
+    if (question.type === 'number') {
+      const num = Number(trimmed.replace(/,/g, ''))
+      if (!Number.isFinite(num) || num <= 0) {
+        setValidationError('Please enter a valid dollar amount (positive number).')
+        return
+      }
+      valueToStore = num
+    }
+
+    setValidationError(null)
+    setSaveError(null)
+    setSaving(true)
+
+    try {
+      await updateDoc(
+        doc(db, 'game_instances', gameInstanceId, 'participants', participantId),
+        { [question.field]: valueToStore },
+      )
+
+      if (isLast) {
+        onCompleteRef.current()
+      } else {
+        setStep((s) => s + 1)
+        setSaving(false)
+      }
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save. Please try again.')
+      setSaving(false)
+    }
+  }
+
+  const handleBack = () => {
+    setStep((s) => s - 1)
+    setValidationError(null)
+    setSaveError(null)
+  }
+
+  return (
+    <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto', fontFamily: 'sans-serif' }}>
+      <p style={{ color: '#555', marginBottom: '0.25rem' }}>{question.label}</p>
+      <h1 style={{ marginTop: 0, marginBottom: '1.75rem', lineHeight: 1.3 }}>
+        {question.prompt}
+      </h1>
+
+      {question.type === 'text' ? (
+        <textarea
+          value={currentValue}
+          onChange={(e) => {
+            setAnswers((prev) => ({ ...prev, [question.field]: e.target.value }))
+            setValidationError(null)
+          }}
+          rows={4}
+          disabled={saving}
+          style={{
+            width: '100%',
+            padding: '0.75rem',
+            fontSize: '1rem',
+            border: '1px solid #ccc',
+            borderRadius: '4px',
+            resize: 'vertical',
+            fontFamily: 'inherit',
+            boxSizing: 'border-box',
+          }}
+        />
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontSize: '1.1rem', color: '#555', userSelect: 'none' }}>$</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={currentValue}
+            placeholder={question.placeholder}
+            onChange={(e) => {
+              setAnswers((prev) => ({ ...prev, [question.field]: e.target.value }))
+              setValidationError(null)
+            }}
+            disabled={saving}
+            style={{
+              flex: 1,
+              padding: '0.75rem',
+              fontSize: '1rem',
+              border: '1px solid #ccc',
+              borderRadius: '4px',
+              fontFamily: 'inherit',
+            }}
+          />
+        </div>
+      )}
+
+      {validationError && (
+        <p style={{ marginTop: '0.75rem', color: '#800', margin: '0.75rem 0 0' }}>
+          {validationError}
+        </p>
+      )}
+
+      {saveError && (
+        <p style={{ marginTop: '0.75rem', color: '#800', margin: '0.75rem 0 0' }}>{saveError}</p>
+      )}
+
+      <div style={{ marginTop: '2rem', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        {step > 0 && (
+          <button
+            onClick={handleBack}
+            disabled={saving}
+            style={{
+              padding: '0.75rem 1.5rem',
+              fontSize: '1rem',
+              cursor: saving ? 'not-allowed' : 'pointer',
+              background: 'none',
+              border: '1px solid #ccc',
+              borderRadius: '4px',
+              color: '#555',
+            }}
+          >
+            Back
+          </button>
+        )}
+        <button
+          onClick={() => void handleContinue()}
+          disabled={saving}
+          style={{
+            padding: '0.75rem 2rem',
+            fontSize: '1rem',
+            cursor: saving ? 'not-allowed' : 'pointer',
+            backgroundColor: saving ? '#999' : '#1a1a1a',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '4px',
+            transition: 'background-color 0.15s',
+          }}
+        >
+          {saving ? 'Saving…' : isLast ? 'Complete' : 'Continue'}
+        </button>
+      </div>
+    </main>
+  )
+}
