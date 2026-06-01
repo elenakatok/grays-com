@@ -17,6 +17,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Game config (PDF URLs, reservation prices, etc.) is backend-only.
+    // Clients get only their role's private URL via the getInfoUrls Cloud Function,
+    // which never exposes the other role's URL.
+    match /game_instances/{instanceId}/config/{doc} {
+      allow read, write: if false;
+    }
+
     // Default deny for everything else.
     match /{document=**} {
       allow read, write: if false;

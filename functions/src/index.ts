@@ -6,6 +6,7 @@ import { reportResult } from './engine/reportResult'
 import { matchParticipants } from './matching'
 import { computeZScores } from './finalize'
 import { assignRole as doAssignRole } from './assignRole'
+import { getInfoUrlsForParticipant } from './getInfoUrls'
 
 admin.initializeApp()
 
@@ -73,6 +74,64 @@ export const assignRole = onRequest(async (req, res) => {
   } catch (err) {
     console.error('assignRole error:', err)
     res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+/**
+ * Returns the PDF URLs a participant is authorized to see.
+ * Reads the participant's role from their Firestore record (server-written, not
+ * client-mutable) and returns only that role's private URL — the other role's
+ * URL is never included in the response.
+ *
+ * Request body (production): { token: "<classroom JWT>" }
+ * Request body (emulator test mode): { _test: { participant_id, game_instance_id } }
+ *
+ * Response: { ok: true, role, public_info_url, private_info_url }
+ */
+export const getInfoUrls = onRequest(async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' })
+    return
+  }
+
+  const body = req.body as Record<string, unknown>
+  let participantId: string
+  let gameInstanceId: string
+
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+
+  if (isEmulator && body._test != null) {
+    const test = body._test as Record<string, unknown>
+    if (typeof test.participant_id !== 'string' || typeof test.game_instance_id !== 'string') {
+      res.status(400).json({ error: '_test requires participant_id and game_instance_id strings' })
+      return
+    }
+    participantId = test.participant_id
+    gameInstanceId = test.game_instance_id
+  } else {
+    if (typeof body.token !== 'string') {
+      res.status(400).json({ error: 'Missing token' })
+      return
+    }
+    let payload: ClassroomTokenPayload
+    try {
+      payload = verifyClassroomToken(body.token)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Invalid token'
+      res.status(401).json({ error: message })
+      return
+    }
+    participantId = payload.participant_id
+    gameInstanceId = payload.game_instance_id
+  }
+
+  try {
+    const result = await getInfoUrlsForParticipant(gameInstanceId, participantId)
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    const message = err instanceof Error ? err.message : 'Internal error'
+    res.status(status).json({ error: message })
   }
 })
 

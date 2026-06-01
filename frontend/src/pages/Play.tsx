@@ -1,68 +1,114 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { signInWithCustomToken } from 'firebase/auth'
+import { auth } from '../firebase'
+import { assignRole, getInfoUrls } from '../api'
+import Phase1Info from '../phases/Phase1Info'
 
 /**
- * Entry point for classroom-launched sessions.
- * URL: /play?token=<JWT>
+ * Entry point for classroom-launched (and emulator dev-mode) sessions.
  *
- * Sends the token to a Cloud Function for RS256 verification (classroom-v1 key),
- * then routes the verified participant into the game flow.
+ * Production URL:  /play?token=<classroom JWT>
+ * Emulator dev URL: /play?_dev_participant_id=<id>&_dev_game_instance_id=<id>
+ *   (DEV only — the _dev_* params bypass JWT verification in the Cloud Functions)
  */
 
-type VerifiedParticipant = {
-  participant_id: string
-  name: string
-  game_instance_id: string
-  game_config_id: string
-  role: 'student' | 'instructor'
-  classroom_callback_url: string
-}
+type GamePhase =
+  | { name: 'loading' }
+  | { name: 'error'; message: string }
+  | { name: 'info'; role: 'Chris' | 'Kelly'; publicUrl: string; privateUrl: string }
+  | { name: 'knowledge-check'; role: 'Chris' | 'Kelly' }
 
 export default function Play() {
   const [searchParams] = useSearchParams()
   const token = searchParams.get('token')
+  const devParticipantId = import.meta.env.DEV ? searchParams.get('_dev_participant_id') : null
+  const devGameInstanceId = import.meta.env.DEV ? searchParams.get('_dev_game_instance_id') : null
 
-  const [participant, setParticipant] = useState<VerifiedParticipant | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [phase, setPhase] = useState<GamePhase>({ name: 'loading' })
 
   useEffect(() => {
-    if (!token) {
-      setError('No token provided. Please launch this game from the classroom.')
-      return
+    let cancelled = false
+
+    const init = async () => {
+      type CallArgs =
+        | { token: string }
+        | { _test: { participant_id: string; game_instance_id: string } }
+
+      let callArgs: CallArgs
+
+      if (import.meta.env.DEV && devParticipantId && devGameInstanceId) {
+        callArgs = { _test: { participant_id: devParticipantId, game_instance_id: devGameInstanceId } }
+      } else if (token) {
+        callArgs = { token }
+      } else {
+        if (!cancelled) {
+          setPhase({
+            name: 'error',
+            message: 'No session token. Please launch this game from the classroom.',
+          })
+        }
+        return
+      }
+
+      try {
+        const { role, customToken } = await assignRole(callArgs)
+        await signInWithCustomToken(auth, customToken)
+        const { public_info_url, private_info_url } = await getInfoUrls(callArgs)
+
+        if (!cancelled) {
+          setPhase({ name: 'info', role, publicUrl: public_info_url, privateUrl: private_info_url })
+        }
+      } catch (err) {
+        if (!cancelled) {
+          const message =
+            err instanceof Error ? err.message : 'Something went wrong. Please try again.'
+          setPhase({ name: 'error', message })
+        }
+      }
     }
 
-    // TODO: call verifyToken Cloud Function with the JWT
-    // On success: setParticipant(result)
-    // On failure: setError('Session link has expired or is invalid.')
-    setError('Token verification not yet implemented.')
-  }, [token])
+    void init()
+    return () => {
+      cancelled = true
+    }
+  }, [token, devParticipantId, devGameInstanceId])
 
-  if (error) {
+  if (phase.name === 'loading') {
     return (
-      <main style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
+      <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto' }}>
+        <p>Setting up your session…</p>
+      </main>
+    )
+  }
+
+  if (phase.name === 'error') {
+    return (
+      <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto' }}>
         <h1>Unable to join</h1>
-        <p>{error}</p>
+        <p>{phase.message}</p>
         <p>
-          If you don't have a classroom link, you can{' '}
-          <a href="/">log in directly</a>.
+          If you don&apos;t have a classroom link, you can <a href="/">log in directly</a>.
         </p>
       </main>
     )
   }
 
-  if (!participant) {
+  if (phase.name === 'knowledge-check') {
     return (
-      <main style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
-        <p>Verifying session...</p>
+      <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto' }}>
+        <h1>Knowledge Check</h1>
+        <p>Coming in the next step.</p>
       </main>
     )
   }
 
-  // TODO: route instructor vs student, then into game phase flow
   return (
-    <main style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
-      <h1>Welcome, {participant.name}</h1>
-      <p>Game flow not yet implemented.</p>
-    </main>
+    <Phase1Info
+      role={phase.role}
+      publicUrl={phase.publicUrl}
+      privateUrl={phase.privateUrl}
+      onContinue={() => setPhase({ name: 'knowledge-check', role: phase.role })}
+    />
   )
 }
