@@ -69,7 +69,7 @@ export default function Phase2OutcomeReporting({
   }, [groupId, gameInstanceId, onComplete])
 
   // ── Shared action helpers ────────────────────────────────────────
-  const withSubmit = (fn: () => Promise<void>) => {
+  const withSubmit = (fn: () => Promise<unknown>) => {
     setSubmitting(true)
     setActionError(null)
     fn()

@@ -6,9 +6,11 @@ import {
   triggerMatching,
   getGroupStatuses,
   submitInstructorOutcome,
+  getUnmatchedParticipants,
+  addLateParticipant,
   type InstructorDevArgs,
-  type MatchGroupResult,
   type GroupStatusResult,
+  type UnmatchedParticipant,
 } from '../api'
 import { rtdb } from '../firebase'
 
@@ -86,7 +88,6 @@ export default function InstructorDashboard() {
   }, [devGameInstanceId])
 
   // ── Matching ─────────────────────────────────────────────────────
-  const [groups, setGroups] = useState<MatchGroupResult[] | null>(null)
   const [matching, setMatching] = useState(false)
   const [matchError, setMatchError] = useState<string | null>(null)
 
@@ -150,6 +151,49 @@ export default function InstructorDashboard() {
       })
   }
 
+  // ── Late-participant (latecomers) ─────────────────────────────────
+  const [unmatchedParticipants, setUnmatchedParticipants] = useState<UnmatchedParticipant[] | null>(null)
+  const [loadingUnmatched, setLoadingUnmatched] = useState(false)
+  const [unmatchedError, setUnmatchedError] = useState<string | null>(null)
+  const [addingLatecomer, setAddingLatecomer] = useState<Record<string, boolean>>({})
+  const [lateAddError, setLateAddError] = useState<Record<string, string>>({})
+
+  const loadUnmatched = (instanceId: string) => {
+    setLoadingUnmatched(true)
+    setUnmatchedError(null)
+    const args: InstructorDevArgs = { _dev: { game_instance_id: instanceId } }
+    getUnmatchedParticipants(args)
+      .then((r) => {
+        setUnmatchedParticipants(r.unmatched)
+        setLoadingUnmatched(false)
+      })
+      .catch((err: unknown) => {
+        setUnmatchedError(err instanceof Error ? err.message : 'Failed to load latecomers.')
+        setLoadingUnmatched(false)
+      })
+  }
+
+  const handleAddLatecomer = (participantId: string, groupId: string) => {
+    if (!devGameInstanceId) return
+    setAddingLatecomer((prev) => ({ ...prev, [participantId]: true }))
+    setLateAddError((prev) => ({ ...prev, [participantId]: '' }))
+    const args: InstructorDevArgs = { _dev: { game_instance_id: devGameInstanceId } }
+    addLateParticipant(args, participantId, groupId)
+      .then(() => {
+        setAddingLatecomer((prev) => ({ ...prev, [participantId]: false }))
+        // Reload both group statuses and unmatched list after adding.
+        loadGroupStatuses(devGameInstanceId)
+        loadUnmatched(devGameInstanceId)
+      })
+      .catch((err: unknown) => {
+        setLateAddError((prev) => ({
+          ...prev,
+          [participantId]: err instanceof Error ? err.message : 'Failed to add.',
+        }))
+        setAddingLatecomer((prev) => ({ ...prev, [participantId]: false }))
+      })
+  }
+
   const activeChrisCount = Object.entries(attending).filter(
     ([pid, info]) => info.role === 'Chris' && presenceStatus(presence[pid]) !== 'disconnected',
   ).length
@@ -170,8 +214,7 @@ export default function InstructorDashboard() {
     setMatchError(null)
     const args: InstructorDevArgs = { _dev: { game_instance_id: devGameInstanceId } }
     triggerMatching(args)
-      .then((result) => {
-        setGroups(result.groups)
+      .then(() => {
         setMatching(false)
         loadGroupStatuses(devGameInstanceId)
       })
@@ -440,45 +483,91 @@ export default function InstructorDashboard() {
           </ul>
         </section>
       )}
+
+      {/* ── Latecomers ────────────────────────────────────────────── */}
+      {alreadyMatched && (
+        <section style={{ marginTop: '2.5rem', maxWidth: '800px' }}>
+          <h2 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem' }}>
+            Latecomers
+          </h2>
+          <p style={{ color: '#555', marginBottom: '1rem', fontSize: '0.9rem' }}>
+            Students who verified attendance but were not present when matching ran.
+            Only groups still on the holding screen (not yet negotiating) are eligible targets.
+          </p>
+
+          <button
+            onClick={() => devGameInstanceId && loadUnmatched(devGameInstanceId)}
+            disabled={loadingUnmatched || !devGameInstanceId}
+          >
+            {loadingUnmatched ? 'Loading…' : unmatchedParticipants === null ? 'Check for latecomers' : 'Refresh'}
+          </button>
+
+          {unmatchedError && (
+            <p style={{ color: '#c00', marginTop: '0.5rem' }}>{unmatchedError}</p>
+          )}
+
+          {unmatchedParticipants !== null && (
+            unmatchedParticipants.length === 0 ? (
+              <p style={{ color: '#555', marginTop: '0.75rem' }}>No unmatched students present.</p>
+            ) : (
+              <ul style={{ listStyle: 'none', padding: 0, margin: '0.75rem 0 0' }}>
+                {unmatchedParticipants.map((p) => (
+                  <li
+                    key={p.participant_id}
+                    style={{
+                      padding: '0.75rem 0',
+                      borderBottom: '1px solid #f0f0f0',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-start' }}>
+                      <div>
+                        <span style={{ fontWeight: 500 }}>{p.display_name || p.participant_id.slice(0, 8) + '…'}</span>
+                        <span style={{ color: '#666', fontSize: '0.875rem', marginLeft: '0.5rem' }}>({p.role})</span>
+                      </div>
+
+                      {p.suggested_group ? (
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span style={{ color: '#555', fontSize: '0.875rem' }}>
+                            Suggested: group {p.suggested_group.group_id.slice(0, 6)}…
+                            &nbsp;({p.suggested_group.current_chris}C+{p.suggested_group.current_kelly}K
+                            &nbsp;→&nbsp;{p.suggested_group.result_composition})
+                          </span>
+                          <button
+                            onClick={() => handleAddLatecomer(p.participant_id, p.suggested_group!.group_id)}
+                            disabled={addingLatecomer[p.participant_id]}
+                            style={{ fontSize: '0.875rem', padding: '0.3rem 0.75rem' }}
+                          >
+                            {addingLatecomer[p.participant_id] ? 'Adding…' : `Add to group`}
+                          </button>
+                        </div>
+                      ) : (
+                        <span style={{ color: '#888', fontSize: '0.875rem' }}>
+                          No eligible group — all groups have started negotiating or are full.
+                        </span>
+                      )}
+                    </div>
+
+                    {lateAddError[p.participant_id] && (
+                      <p style={{ color: '#c00', fontSize: '0.875rem', marginTop: '0.35rem' }}>
+                        {lateAddError[p.participant_id]}
+                        {lateAddError[p.participant_id].includes('re-suggest') && (
+                          <button
+                            onClick={() => devGameInstanceId && loadUnmatched(devGameInstanceId)}
+                            style={{ marginLeft: '0.5rem', fontSize: '0.8rem', padding: '0.2rem 0.5rem' }}
+                          >
+                            Refresh suggestions
+                          </button>
+                        )}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )
+          )}
+        </section>
+      )}
     </main>
   )
 }
 
-function GroupsDisplay({
-  groups,
-  attending,
-}: {
-  groups: MatchGroupResult[]
-  attending: Record<string, AttendingEntry>
-}) {
-  const name = (pid: string) => attending[pid]?.display_name ?? pid.slice(0, 8) + '…'
-
-  return (
-    <div>
-      <p style={{ color: '#555', marginBottom: '1rem' }}>
-        {groups.length} group{groups.length !== 1 ? 's' : ''} matched.
-      </p>
-      <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-        {groups.map((g, i) => {
-          const chrisLabels = g.chris_participants.map((pid) => {
-            const isLead = pid === g.lead_participant_id
-            return `${name(pid)} (Chris${isLead ? ', lead' : ''})`
-          })
-          const kellyLabels = g.kelly_participants.map((pid) => `${name(pid)} (Kelly)`)
-          return (
-            <li
-              key={g.group_id}
-              style={{
-                padding: '0.5rem 0',
-                borderBottom: '1px solid #f0f0f0',
-              }}
-            >
-              <span style={{ fontWeight: 500 }}>Group {i + 1}:</span>{' '}
-              {[...chrisLabels, ...kellyLabels].join(' + ')}
-            </li>
-          )
-        })}
-      </ul>
-    </div>
-  )
-}

@@ -1,12 +1,13 @@
 import { randomUUID } from 'crypto'
 import * as admin from 'firebase-admin'
-import { FieldValue } from 'firebase-admin/firestore'
-import { onRequest } from 'firebase-functions/v2/https'
-import { defineSecret } from 'firebase-functions/params'
+import { FieldValue, Timestamp } from 'firebase-admin/firestore'
+import { onRequest, onCall, HttpsError } from 'firebase-functions/v2/https'
 import { verifyClassroomToken, ClassroomTokenPayload } from './engine/verifyToken'
 import { reportResult } from './engine/reportResult'
 import { matchParticipants } from './matching'
 import { computeZScores } from './finalize'
+import type { GameConfig, ParticipantRecord } from './finalize'
+import { suggestGroupForLatecomer } from './lateParticipant'
 import { assignRole as doAssignRole } from './assignRole'
 import { getInfoUrlsForParticipant } from './getInfoUrls'
 import { scoreKnowledgeCheck } from './submitKnowledgeCheck'
@@ -16,9 +17,8 @@ import { generateAttendanceCode as doGenerateCode, verifyAttendanceCode as doVer
 
 admin.initializeApp()
 
-// Public key is baked into classroomPublicKey.ts — no secret needed.
-// Only the callback secret is truly sensitive.
-const classroomCallbackSecret = defineSecret('CLASSROOM_CALLBACK_SECRET')
+// Public key is baked into classroomPublicKey.ts — no secret needed for auth.
+// (CLASSROOM_CALLBACK_SECRET will be added back when the classroom-push step is wired.)
 
 export { reportResult, matchParticipants, computeZScores }
 
@@ -904,19 +904,333 @@ export const getGroupStatuses = onRequest(async (req, res) => {
   }
 })
 
+// ── Late-participant helpers ───────────────────────────────────────────────────
+
 /**
- * Finalizes a game instance: computes z-scores and pushes updated results
- * to the classroom callback URL.
- * Called by the instructor dashboard ("Finalize Results" button).
+ * Returns all participants who have verified attendance but are not yet in any
+ * group (entered the code after "Match Now" ran, or were absent then and arrived
+ * later), together with a suggested group for each.
+ *
+ * "Present" here means: RTDB presence record exists (currently connected) AND
+ * attendance_confirmed_at is set in Firestore.
+ *
+ * Request body (emulator): { _dev: { game_instance_id } }
+ * Response: { ok, unmatched: [{ participant_id, display_name, role, suggested_group }] }
  */
-export const finalizeInstance = onRequest(
-  { secrets: [classroomCallbackSecret] },
-  async (req, res) => {
-    // TODO: read completed participants from Firestore
-    // TODO: run computeZScores()
-    // TODO: call reportResult() for each participant with normalized_score
-    void req
-    void classroomCallbackSecret
-    res.status(501).json({ error: 'Not yet implemented' })
+export const getUnmatchedParticipants = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  if (!gameInstanceId) return
+
+  try {
+    const db = admin.firestore()
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+
+    // Read RTDB presence, all participants, and all groups in parallel.
+    const [presenceSnap, participantsSnap, groupsSnap] = await Promise.all([
+      admin.database().ref(`presence/${gameInstanceId}`).once('value'),
+      instanceRef.collection('participants').get(),
+      instanceRef.collection('groups').get(),
+    ])
+
+    const presentIds = new Set<string>(Object.keys(presenceSnap.val() ?? {}))
+
+    // Collect participant IDs already in a group.
+    const matchedIds = new Set<string>()
+    const groupSnapshots = groupsSnap.docs.map((d) => {
+      const gd = d.data()
+      const chrisIds = gd.chris_participants as string[]
+      const kellyIds = gd.kelly_participants as string[]
+      for (const pid of [...chrisIds, ...kellyIds]) matchedIds.add(pid)
+      return {
+        group_id: d.id,
+        status: gd.status as string,
+        chris_participants: chrisIds,
+        kelly_participants: kellyIds,
+      }
+    })
+
+    // Unmatched = attended + present + has valid role + not in any group.
+    const unmatched = participantsSnap.docs
+      .filter((doc) => {
+        const d = doc.data()
+        return (
+          d.attendance_confirmed_at != null &&
+          presentIds.has(doc.id) &&
+          (d.role === 'Chris' || d.role === 'Kelly') &&
+          !matchedIds.has(doc.id)
+        )
+      })
+      .map((doc) => {
+        const d = doc.data()
+        const role = d.role as 'Chris' | 'Kelly'
+        return {
+          participant_id: doc.id,
+          display_name: (d.display_name ?? '') as string,
+          role,
+          suggested_group: suggestGroupForLatecomer(role, groupSnapshots),
+        }
+      })
+
+    res.json({ ok: true, unmatched })
+  } catch (err) {
+    console.error('getUnmatchedParticipants error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+/**
+ * Adds a late participant to a specific group.
+ *
+ * Server-side enforcement: inside a transaction, re-checks that the group is
+ * still in 'matched' state AND still has room under the composition caps before
+ * writing. If the group started negotiating between the suggestion and this
+ * call, the transaction rejects with a clear error so the instructor can
+ * re-suggest.
+ *
+ * Request body (emulator): { _dev: { game_instance_id }, participant_id, group_id }
+ * Response: { ok, participant_id, group_id, composition } or error
+ */
+export const addLateParticipant = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  if (!gameInstanceId) return
+
+  const participantId = body.participant_id
+  const groupId = body.group_id
+  if (typeof participantId !== 'string' || !participantId) {
+    res.status(400).json({ error: 'participant_id is required' }); return
+  }
+  if (typeof groupId !== 'string' || !groupId) {
+    res.status(400).json({ error: 'group_id is required' }); return
+  }
+
+  try {
+    const db = admin.firestore()
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+    const pRef = instanceRef.collection('participants').doc(participantId)
+    const gRef = instanceRef.collection('groups').doc(groupId)
+
+    let resultComposition = ''
+    let alreadyInThisGroup = false
+
+    await db.runTransaction(async (tx) => {
+      const [pSnap, gSnap] = await Promise.all([tx.get(pRef), tx.get(gRef)])
+
+      if (!pSnap.exists) {
+        throw Object.assign(new Error('Participant not found.'), { status: 404 })
+      }
+      if (!gSnap.exists) {
+        throw Object.assign(new Error('Group not found.'), { status: 404 })
+      }
+
+      const pd = pSnap.data()!
+      const gd = gSnap.data()!
+
+      // Idempotency: already in this exact group.
+      if (pd.group_id === groupId) {
+        alreadyInThisGroup = true
+        return
+      }
+      // Already matched to a different group — refuse.
+      if (pd.group_id) {
+        throw Object.assign(
+          new Error(`Participant is already in a different group (${pd.group_id as string}).`),
+          { status: 409 },
+        )
+      }
+
+      const role = pd.role as 'Chris' | 'Kelly'
+      const chrisIds = gd.chris_participants as string[]
+      const kellyIds = gd.kelly_participants as string[]
+      const total = chrisIds.length + kellyIds.length
+
+      // Re-check: group must still be in pre-negotiation state.
+      if (gd.status !== 'matched') {
+        throw Object.assign(
+          new Error(
+            `Cannot add to group — negotiation has already started ` +
+            `(status: '${gd.status as string}'). Please re-suggest a different group.`,
+          ),
+          { status: 409 },
+        )
+      }
+      // Re-check total cap.
+      if (total >= 3) {
+        throw Object.assign(
+          new Error(
+            `Group is now full (${chrisIds.length}C+${kellyIds.length}K). ` +
+            `Please re-suggest a different group.`,
+          ),
+          { status: 409 },
+        )
+      }
+      // Re-check role cap.
+      if (role === 'Chris' && chrisIds.length >= 2) {
+        throw Object.assign(
+          new Error(
+            `Group already has ${chrisIds.length} Chrises. ` +
+            `Please re-suggest a different group.`,
+          ),
+          { status: 409 },
+        )
+      }
+      if (role === 'Kelly' && kellyIds.length >= 2) {
+        throw Object.assign(
+          new Error(
+            `Group already has ${kellyIds.length} Kellys. ` +
+            `Please re-suggest a different group.`,
+          ),
+          { status: 409 },
+        )
+      }
+
+      // All checks pass — write.
+      const roleField = role === 'Chris' ? 'chris_participants' : 'kelly_participants'
+      tx.update(gRef, { [roleField]: FieldValue.arrayUnion(participantId) })
+      tx.update(pRef, { group_id: groupId, is_lead: false })
+
+      const newChris = chrisIds.length + (role === 'Chris' ? 1 : 0)
+      const newKelly = kellyIds.length + (role === 'Kelly' ? 1 : 0)
+      resultComposition = `${newChris}C+${newKelly}K`
+    })
+
+    if (alreadyInThisGroup) {
+      res.json({ ok: true, participant_id: participantId, group_id: groupId, already_matched: true })
+    } else {
+      res.json({ ok: true, participant_id: participantId, group_id: groupId, composition: resultComposition })
+    }
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    const message = err instanceof Error ? err.message : 'Internal error'
+    res.status(status).json({ error: message })
+  }
+})
+
+/**
+ * Finalizes a game instance: reads all participant and group records, computes
+ * per-role z-scores via computeZScores(), and writes raw_score / normalized_score
+ * back to each completed participant's Firestore record.
+ *
+ * Classroom-push wiring is a separate step (needs CLASSROOM_CALLBACK_SECRET).
+ *
+ * Input:  { game_instance_id: string }
+ * Output: { ok: true, scored: { Chris: n, Kelly: n, total: n } }
+ */
+export const finalizeInstance = onCall(
+  { invoker: 'public' },
+  async (request) => {
+    const data = request.data as { game_instance_id?: unknown }
+    const gameInstanceId = data.game_instance_id
+    if (typeof gameInstanceId !== 'string' || gameInstanceId === '') {
+      throw new HttpsError('invalid-argument', 'game_instance_id is required')
+    }
+
+    const db = admin.firestore()
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+
+    const [configSnap, participantsSnap, groupsSnap] = await Promise.all([
+      instanceRef.collection('config').doc('main').get(),
+      instanceRef.collection('participants').get(),
+      instanceRef.collection('groups').get(),
+    ])
+
+    // Standard reservation-price defaults — match the standard role PDFs.
+    // Must stay in sync with the PDFs if an instructor ever overrides them in config.
+    const STANDARD_DEFAULTS = {
+      reservation_price_chris: 25_000,   // Chris's floor: cost to switch domains
+      reservation_price_kelly: 475_000,  // Kelly's ceiling: 1% of $47.5M ticket sales
+    } as const
+
+    // Three cases for reservation prices:
+    //   1. Config document loaded and both fields are present → use them (instructor override).
+    //   2. Config document loaded but fields are absent/unset → use STANDARD_DEFAULTS.
+    //      This is the normal pre-configure state; no warning needed.
+    //   3. Config document could not be read (missing document, null data) → abort.
+    //      A missing document means we cannot distinguish "zero" from "unknown";
+    //      scoring against silent assumptions could produce wrong grades.
+    const rawConfig = configSnap.data()
+    if (rawConfig == null) {
+      throw new HttpsError(
+        'not-found',
+        `Finalize aborted: could not read game config for instance ${gameInstanceId}. ` +
+        `Reservation prices unknown — refusing to score against assumptions.`,
+      )
+    }
+    const configData = rawConfig as Record<string, unknown>
+    const hasChris = typeof configData.reservation_price_chris === 'number'
+    const hasKelly = typeof configData.reservation_price_kelly === 'number'
+    const gameConfig: GameConfig = {
+      reservation_price_chris: hasChris
+        ? (configData.reservation_price_chris as number)
+        : STANDARD_DEFAULTS.reservation_price_chris,
+      reservation_price_kelly: hasKelly
+        ? (configData.reservation_price_kelly as number)
+        : STANDARD_DEFAULTS.reservation_price_kelly,
+    }
+    console.info(
+      `[finalizeInstance] ${gameInstanceId}: reservation prices — ` +
+      `Chris $${gameConfig.reservation_price_chris}${hasChris ? ' (config)' : ' (default)'}, ` +
+      `Kelly $${gameConfig.reservation_price_kelly}${hasKelly ? ' (config)' : ' (default)'}`,
+    )
+
+    // Index completed group outcomes by group_id.
+    const completedGroups = new Map<string, { agreement_reached: boolean; final_price: number | null }>()
+    for (const groupDoc of groupsSnap.docs) {
+      const g = groupDoc.data()
+      if (g.status === 'completed') {
+        completedGroups.set(groupDoc.id, {
+          agreement_reached: g.agreement_reached as boolean,
+          final_price: (g.final_price ?? null) as number | null,
+        })
+      }
+    }
+
+    // Map each participant to a ParticipantRecord.
+    // 'completed' = group finished (agreement or walk-away).
+    // 'no_show'   = everything else: group not completed, group_id absent, or truly absent.
+    //               All no_show cases receive normalized_score = -2 (floor marker).
+    const participantRecords: ParticipantRecord[] = participantsSnap.docs
+      .filter((doc) => {
+        const role = doc.data().role
+        return role === 'Chris' || role === 'Kelly'
+      })
+      .map((doc) => {
+        const d = doc.data()
+        const groupOutcome = d.group_id
+          ? completedGroups.get(d.group_id as string)
+          : undefined
+        return {
+          participant_id: doc.id,
+          role: d.role as 'Chris' | 'Kelly',
+          status: groupOutcome !== undefined ? 'completed' : 'no_show',
+          agreement_reached: groupOutcome?.agreement_reached ?? false,
+          final_price: groupOutcome?.final_price ?? null,
+          knowledge_check_score: (d.knowledge_check_score ?? null) as number | null,
+          details: {},
+        }
+      })
+
+    // Pure function does all the math — no Firestore access inside.
+    const results = computeZScores(participantRecords, gameConfig)
+
+    // Write raw_score and normalized_score back to each completed participant.
+    const batch = db.batch()
+    const finalizedAt = Timestamp.now()
+    for (const r of results) {
+      batch.update(
+        instanceRef.collection('participants').doc(r.participant_id),
+        { raw_score: r.raw_score, normalized_score: r.normalized_score, finalized_at: finalizedAt },
+      )
+    }
+    await batch.commit()
+
+    const chrisCount = results.filter((r) => r.role === 'Chris').length
+    const kellyCount = results.filter((r) => r.role === 'Kelly').length
+    return { ok: true, scored: { Chris: chrisCount, Kelly: kellyCount, total: results.length } }
   },
 )

@@ -119,3 +119,34 @@ export const submitInstructorOutcome = (
 /** Returns all groups with current status — for the instructor dashboard. */
 export const getGroupStatuses = (args: InstructorDevArgs) =>
   callFunction<{ ok: boolean; groups: GroupStatusResult[] }>('getGroupStatuses', args)
+
+// ── Late-participant helpers ───────────────────────────────────────────────────
+
+export type LateGroupSuggestion = {
+  group_id: string
+  current_chris: number
+  current_kelly: number
+  result_composition: string  // e.g. '2C+1K'
+} | null
+
+export type UnmatchedParticipant = {
+  participant_id: string
+  display_name: string
+  role: 'Chris' | 'Kelly'
+  suggested_group: LateGroupSuggestion
+}
+
+/** Returns present, attendance-verified participants who are not yet in any group. */
+export const getUnmatchedParticipants = (args: InstructorDevArgs) =>
+  callFunction<{ ok: boolean; unmatched: UnmatchedParticipant[] }>('getUnmatchedParticipants', args)
+
+/** Adds a late participant to a specific group (server re-checks eligibility). */
+export const addLateParticipant = (
+  args: InstructorDevArgs,
+  participantId: string,
+  groupId: string,
+) =>
+  callFunction<{ ok: boolean; composition?: string; already_matched?: boolean }>(
+    'addLateParticipant',
+    { ...args, participant_id: participantId, group_id: groupId },
+  )
