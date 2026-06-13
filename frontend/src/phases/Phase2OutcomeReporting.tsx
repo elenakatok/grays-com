@@ -52,6 +52,8 @@ export default function Phase2OutcomeReporting({
   const [submitting, setSubmitting] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const calledComplete = useRef(false)
+  const onCompleteRef = useRef(onComplete)
+  onCompleteRef.current = onComplete
 
   useEffect(() => {
     return onSnapshot(
@@ -62,11 +64,11 @@ export default function Phase2OutcomeReporting({
         setGroupData(d)
         if (d.status === 'completed' && !calledComplete.current) {
           calledComplete.current = true
-          onComplete()
+          onCompleteRef.current()
         }
       },
     )
-  }, [groupId, gameInstanceId, onComplete])
+  }, [groupId, gameInstanceId]) // onComplete intentionally omitted — held via ref above
 
   // ── Shared action helpers ────────────────────────────────────────
   const withSubmit = (fn: () => Promise<unknown>) => {
@@ -104,11 +106,13 @@ export default function Phase2OutcomeReporting({
   }
 
   const { status, disagree_count, lead_outcome, confirmations } = groupData
+  const role: 'Chris' | 'Kelly' = groupData.chris_participants.includes(participantId) ? 'Chris' : 'Kelly'
 
   // ── Deadlock ─────────────────────────────────────────────────────
   if (status === 'deadlocked') {
     return (
       <main style={mainStyle}>
+        <p style={{ color: '#555', marginTop: 0, marginBottom: '1.25rem' }}>You are {role}</p>
         <h1 style={{ marginTop: 0 }}>Instructor intervention needed</h1>
         <p style={{ fontSize: '1.05rem', lineHeight: 1.6, marginBottom: '1rem' }}>
           Your group was unable to agree on the outcome after 3 attempts.
@@ -128,6 +132,7 @@ export default function Phase2OutcomeReporting({
       const retrying = disagree_count > 0
       return (
         <main style={mainStyle}>
+          <p style={{ color: '#555', marginTop: 0, marginBottom: '1.25rem' }}>You are {role}</p>
           <h1 style={{ marginTop: 0 }}>Report outcome</h1>
           {retrying && (
             <p
@@ -159,7 +164,7 @@ export default function Phase2OutcomeReporting({
               type="number"
               min="0"
               step="1"
-              placeholder="e.g. 287500"
+              placeholder="Enter a whole dollar amount"
               value={priceInput}
               onChange={(e) => setPriceInput(e.target.value)}
               disabled={submitting}
@@ -191,6 +196,7 @@ export default function Phase2OutcomeReporting({
     const confirmed = Object.values(confirmations).filter((v) => v === 'confirmed').length
     return (
       <main style={mainStyle}>
+        <p style={{ color: '#555', marginTop: 0, marginBottom: '1.25rem' }}>You are {role}</p>
         <h1 style={{ marginTop: 0 }}>Waiting for your group</h1>
         <p style={{ fontSize: '1.05rem', lineHeight: 1.6, marginBottom: '1rem' }}>
           You reported: <strong>{outcomeLabel(lead_outcome)}</strong>
@@ -209,6 +215,7 @@ export default function Phase2OutcomeReporting({
     const retrying = disagree_count > 0
     return (
       <main style={mainStyle}>
+        <p style={{ color: '#555', marginTop: 0, marginBottom: '1.25rem' }}>You are {role}</p>
         <h1 style={{ marginTop: 0 }}>Waiting for the outcome</h1>
         <p style={{ fontSize: '1.05rem', lineHeight: 1.6, color: '#555' }}>
           {retrying
@@ -225,6 +232,7 @@ export default function Phase2OutcomeReporting({
   if (myConf === 'pending') {
     return (
       <main style={mainStyle}>
+        <p style={{ color: '#555', marginTop: 0, marginBottom: '1.25rem' }}>You are {role}</p>
         <h1 style={{ marginTop: 0 }}>Confirm the outcome</h1>
         <p style={{ fontSize: '1.05rem', lineHeight: 1.6, marginBottom: '1.5rem' }}>
           Your lead reported:{' '}
@@ -255,6 +263,7 @@ export default function Phase2OutcomeReporting({
   const confirmed = Object.values(confirmations).filter((v) => v === 'confirmed').length
   return (
     <main style={mainStyle}>
+      <p style={{ color: '#555', marginTop: 0, marginBottom: '1.25rem' }}>You are {role}</p>
       <h1 style={{ marginTop: 0 }}>Waiting for your group</h1>
       <p style={{ fontSize: '1.05rem', lineHeight: 1.6, marginBottom: '1rem' }}>
         You confirmed: <strong>{outcomeLabel(lead_outcome)}</strong>

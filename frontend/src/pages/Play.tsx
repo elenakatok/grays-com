@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { signInWithCustomToken } from 'firebase/auth'
+import { signInWithCustomToken, setPersistence, inMemoryPersistence } from 'firebase/auth'
 import { doc, getDoc } from 'firebase/firestore'
 import { auth, db } from '../firebase'
 import { type CallArgs, assignRole, getInfoUrls } from '../api'
@@ -96,6 +96,9 @@ export default function Play() {
           isLead: false,
         }
 
+        if (import.meta.env.DEV) {
+          await setPersistence(auth, inMemoryPersistence)
+        }
         await signInWithCustomToken(auth, customToken)
 
         // Resume routing: skip already-completed steps on page reload.

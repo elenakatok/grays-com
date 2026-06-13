@@ -143,12 +143,10 @@ export default function InstructorDashboard() {
     loadGroupStatuses(devGameInstanceId)
   }, [devGameInstanceId])
 
-  // Auto-refresh every 8s while any group is in 'reporting' or 'deadlocked' state
+  // Auto-refresh every 8s while any group is not yet completed
   useEffect(() => {
     if (!devGameInstanceId || !groupStatuses) return
-    const needsRefresh = groupStatuses.some(
-      (g) => g.status === 'reporting' || g.status === 'deadlocked',
-    )
+    const needsRefresh = groupStatuses.some((g) => g.status !== 'completed')
     if (needsRefresh) {
       refreshIntervalRef.current = setInterval(() => loadGroupStatuses(devGameInstanceId), 8_000)
     }
@@ -753,19 +751,25 @@ export default function InstructorDashboard() {
                 )}
 
                 {/* Primary action button */}
-                <div style={{ marginTop: '0.5rem' }}>
-                  <button
-                    onClick={() => { void handleFinalize() }}
-                    disabled={running || guardResult.blocked || !devGameInstanceId}
-                    style={{ fontSize: '1rem', padding: '0.6rem 1.5rem' }}
-                  >
-                    {finalizePhase.phase === 'finalizing'
-                      ? 'Computing…'
-                      : finalizePhase.phase === 'pushing'
-                      ? 'Sending…'
-                      : 'Finalize Results'}
-                  </button>
-                </div>
+                {finalizePhase.phase === 'success' ? (
+                  <p style={{ fontWeight: 500, color: '#2a7', marginTop: '0.5rem' }}>
+                    Results finalized ✅
+                  </p>
+                ) : (
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <button
+                      onClick={() => { void handleFinalize() }}
+                      disabled={running || guardResult.blocked || !devGameInstanceId}
+                      style={{ fontSize: '1rem', padding: '0.6rem 1.5rem' }}
+                    >
+                      {finalizePhase.phase === 'finalizing'
+                        ? 'Computing…'
+                        : finalizePhase.phase === 'pushing'
+                        ? 'Sending…'
+                        : 'Finalize Results'}
+                    </button>
+                  </div>
+                )}
               </>
             )
           })()}

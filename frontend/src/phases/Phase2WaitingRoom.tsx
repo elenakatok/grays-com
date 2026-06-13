@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { db } from '../firebase'
 import { usePresence } from '../engine/usePresence'
@@ -20,8 +20,17 @@ export default function Phase2WaitingRoom({
 }: Props) {
   usePresence(gameInstanceId, participantId)
 
+  // Keep a ref to onMatched so the snapshot callback always calls the latest
+  // version without the effect needing to re-run (and re-subscribe) when the
+  // prop reference changes across Play renders.
+  const onMatchedRef = useRef(onMatched)
+  onMatchedRef.current = onMatched
+
   // Watch the participant's own Firestore record for group_id to appear.
   useEffect(() => {
+    const tag = `[WaitingRoom:${participantId}]`
+    console.log(`${tag} listener attaching @ ${new Date().toISOString()}`)
+
     const participantRef = doc(
       db,
       'game_instances',
@@ -29,11 +38,35 @@ export default function Phase2WaitingRoom({
       'participants',
       participantId,
     )
-    return onSnapshot(participantRef, (snap) => {
+
+    const unsub = onSnapshot(participantRef, (snap) => {
       const groupId = snap.data()?.group_id as string | undefined
-      if (groupId) onMatched(groupId)
+      console.log(
+        `${tag} snapshot fired — group_id=${groupId ?? '(none)'}` +
+        ` fromCache=${snap.metadata.fromCache}` +
+        ` hasPendingWrites=${snap.metadata.hasPendingWrites}` +
+        ` @ ${new Date().toISOString()}`,
+      )
+      if (groupId) {
+        console.log(`${tag} calling onMatched(${groupId})`)
+        onMatchedRef.current(groupId)
+      }
     })
-  }, [gameInstanceId, participantId, onMatched])
+
+    const onVisibilityChange = () => {
+      console.log(
+        `${tag} visibilitychange → ${document.visibilityState}` +
+        ` @ ${new Date().toISOString()}`,
+      )
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
+    return () => {
+      console.log(`${tag} listener cleanup (unmount or re-run) @ ${new Date().toISOString()}`)
+      unsub()
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [gameInstanceId, participantId]) // onMatched intentionally omitted — held via ref above
 
   return (
     <main

@@ -70,40 +70,54 @@ async function fsDelete(url: string) {
   await fetch(url, { method: 'DELETE', headers: { 'Authorization': 'Bearer owner' } })
 }
 
+async function seedGameConfig(instanceId: string) {
+  const url = `${FS_EMULATOR}/v1/projects/${PROJECT_ID}/databases/(default)/documents/game_instances/${instanceId}/config/main`
+  await fsPatch(url, {
+    reservation_price_chris: { integerValue: '25000' },
+    reservation_price_kelly: { integerValue: '475000' },
+  })
+}
+
 async function seedPhase2Entry(instanceId: string) {
   const base = fsBase(instanceId)
   // Delete first so existing Phase 2 fields (confirmed_ready_at, attendance_confirmed_at,
   // group_id, etc.) are fully cleared — Firestore PATCH merges on the emulator.
   await Promise.all(SEED_MEMBERS.map(({ id }) => fsDelete(`${base}/${id}`)))
-  await Promise.all(SEED_MEMBERS.map(({ id, role, name }) =>
-    fsPatch(`${base}/${id}`, {
-      participant_id:   { stringValue: id },
-      game_instance_id: { stringValue: instanceId },
-      role:             { stringValue: role },
-      display_name:     { stringValue: name },
-      prep_status:      { stringValue: 'complete' },
-    }),
-  ))
+  await Promise.all([
+    ...SEED_MEMBERS.map(({ id, role, name }) =>
+      fsPatch(`${base}/${id}`, {
+        participant_id:   { stringValue: id },
+        game_instance_id: { stringValue: instanceId },
+        role:             { stringValue: role },
+        display_name:     { stringValue: name },
+        prep_status:      { stringValue: 'complete' },
+      }),
+    ),
+    seedGameConfig(instanceId),
+  ])
 }
 
 async function seedWaitingRoom(instanceId: string) {
   const base = fsBase(instanceId)
   const now = Date.now()
-  await Promise.all(SEED_MEMBERS.map(async ({ id, role, name }) => {
-    await fsPatch(`${base}/${id}`, {
-      participant_id:           { stringValue: id },
-      game_instance_id:         { stringValue: instanceId },
-      role:                     { stringValue: role },
-      display_name:             { stringValue: name },
-      prep_status:              { stringValue: 'complete' },
-      confirmed_ready_at:       { timestampValue: FIXED_TS },
-      attendance_confirmed_at:  { timestampValue: FIXED_TS },
-    })
-    await rtdbPut(
-      `/attending/${instanceId}/${id}.json`,
-      { display_name: name, role, confirmed_at: now },
-    )
-  }))
+  await Promise.all([
+    ...SEED_MEMBERS.map(async ({ id, role, name }) => {
+      await fsPatch(`${base}/${id}`, {
+        participant_id:           { stringValue: id },
+        game_instance_id:         { stringValue: instanceId },
+        role:                     { stringValue: role },
+        display_name:             { stringValue: name },
+        prep_status:              { stringValue: 'complete' },
+        confirmed_ready_at:       { timestampValue: FIXED_TS },
+        attendance_confirmed_at:  { timestampValue: FIXED_TS },
+      })
+      await rtdbPut(
+        `/attending/${instanceId}/${id}.json`,
+        { display_name: name, role, confirmed_at: now },
+      )
+    }),
+    seedGameConfig(instanceId),
+  ])
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
