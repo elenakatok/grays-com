@@ -21,6 +21,7 @@ admin.initializeApp()
 // (CLASSROOM_CALLBACK_SECRET will be added back when the classroom-push step is wired.)
 
 export { reportResult, matchParticipants, computeZScores }
+export { pushResultsToClassroom } from './callbacks'
 
 /**
  * Assigns a role (Chris or Kelly) to a participant on first launch.
