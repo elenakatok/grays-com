@@ -8,6 +8,8 @@ import {
   submitInstructorOutcome,
   getUnmatchedParticipants,
   addLateParticipant,
+  finalizeInstance,
+  pushResultsToClassroom,
   type InstructorDevArgs,
   type GroupStatusResult,
   type UnmatchedParticipant,
@@ -26,6 +28,39 @@ const IDLE_THRESHOLD_MS = 45_000
 
 type AttendingEntry = { display_name: string; role: string; confirmed_at: number }
 type PresenceEntry = { online: boolean; last_seen: number }
+
+// ── Finalize types ────────────────────────────────────────────────────────────
+
+type FailedPush = { participant_id: string; reason: string }
+
+type FinalizePhase =
+  | { phase: 'idle' }
+  | { phase: 'finalizing' }
+  | { phase: 'pushing' }
+  | { phase: 'success'; total: number }
+  | { phase: 'partial'; total: number; succeeded: number; failed: FailedPush[] }
+  | { phase: 'error'; message: string; retryPushOnly: boolean }
+
+// Same algorithm as functions/src/finalizeGuard.ts — typed against GroupStatusResult.
+function checkAllGroupsComplete(
+  groups: GroupStatusResult[],
+): { blocked: false } | { blocked: true; message: string } {
+  const incomplete: Array<{ number: number; status: string }> = []
+  for (let i = 0; i < groups.length; i++) {
+    if (groups[i].status !== 'completed') {
+      incomplete.push({ number: i + 1, status: groups[i].status })
+    }
+  }
+  if (incomplete.length === 0) return { blocked: false }
+  const count = incomplete.length
+  const listing = incomplete
+    .map(({ number, status }) => `Group ${number} (${status})`)
+    .join(', ')
+  return {
+    blocked: true,
+    message: `${count} group${count !== 1 ? 's' : ''} still in progress: ${listing}.`,
+  }
+}
 
 function presenceStatus(entry: PresenceEntry | undefined): 'active' | 'idle' | 'disconnected' {
   if (!entry?.online) return 'disconnected'
@@ -192,6 +227,49 @@ export default function InstructorDashboard() {
         }))
         setAddingLatecomer((prev) => ({ ...prev, [participantId]: false }))
       })
+  }
+
+  // ── Finalize ─────────────────────────────────────────────────────
+  const [finalizePhase, setFinalizePhase] = useState<FinalizePhase>({ phase: 'idle' })
+
+  const handlePushOnly = async () => {
+    if (!devGameInstanceId) return
+    setFinalizePhase({ phase: 'pushing' })
+    try {
+      const result = await pushResultsToClassroom(devGameInstanceId)
+      if (result.failed.length === 0) {
+        setFinalizePhase({ phase: 'success', total: result.total })
+      } else {
+        setFinalizePhase({
+          phase: 'partial',
+          total: result.total,
+          succeeded: result.succeeded,
+          failed: result.failed,
+        })
+      }
+    } catch (err) {
+      setFinalizePhase({
+        phase: 'error',
+        message: err instanceof Error ? err.message : 'Push to gradebook failed.',
+        retryPushOnly: true,
+      })
+    }
+  }
+
+  const handleFinalize = async () => {
+    if (!devGameInstanceId) return
+    setFinalizePhase({ phase: 'finalizing' })
+    try {
+      await finalizeInstance(devGameInstanceId)
+    } catch (err) {
+      setFinalizePhase({
+        phase: 'error',
+        message: err instanceof Error ? err.message : 'Finalization failed.',
+        retryPushOnly: false,
+      })
+      return
+    }
+    await handlePushOnly()
   }
 
   const activeChrisCount = Object.entries(attending).filter(
@@ -565,6 +643,132 @@ export default function InstructorDashboard() {
               </ul>
             )
           )}
+        </section>
+      )}
+      {/* ── Finalize Results ──────────────────────────────────────── */}
+      {alreadyMatched && (
+        <section style={{ marginTop: '2.5rem', maxWidth: '640px' }}>
+          <h2 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem' }}>
+            Finalize Results
+          </h2>
+
+          {(() => {
+            const guardResult = checkAllGroupsComplete(groupStatuses ?? [])
+            const running =
+              finalizePhase.phase === 'finalizing' || finalizePhase.phase === 'pushing'
+
+            return (
+              <>
+                {/* Guard status */}
+                {guardResult.blocked ? (
+                  <p style={{ color: '#c00', marginBottom: '0.75rem' }}>
+                    {guardResult.message}
+                  </p>
+                ) : (
+                  <p style={{ color: '#555', marginBottom: '0.75rem' }}>
+                    All groups completed. Ready to finalize and record grades.
+                  </p>
+                )}
+
+                {/* Running progress */}
+                {finalizePhase.phase === 'finalizing' && (
+                  <p style={{ color: '#555', fontStyle: 'italic' }}>
+                    Computing scores…
+                  </p>
+                )}
+                {finalizePhase.phase === 'pushing' && (
+                  <p style={{ color: '#555', fontStyle: 'italic' }}>
+                    Sending results to gradebook…
+                  </p>
+                )}
+
+                {/* Success */}
+                {finalizePhase.phase === 'success' && (
+                  <p style={{ color: '#2a7', fontWeight: 500 }}>
+                    ✓ All {finalizePhase.total} results recorded in the gradebook.
+                  </p>
+                )}
+
+                {/* Partial failure */}
+                {finalizePhase.phase === 'partial' && (
+                  <div
+                    style={{
+                      padding: '0.75rem',
+                      background: '#fffbf0',
+                      border: '1px solid #f5c650',
+                      borderRadius: 4,
+                      marginBottom: '0.75rem',
+                    }}
+                  >
+                    <p style={{ margin: '0 0 0.5rem', fontWeight: 500 }}>
+                      {finalizePhase.succeeded} of {finalizePhase.total} recorded.{' '}
+                      {finalizePhase.failed.length} did not reach the gradebook:
+                    </p>
+                    <ul style={{ margin: '0 0 0.75rem', paddingLeft: '1.25rem' }}>
+                      {finalizePhase.failed.map((f) => (
+                        <li key={f.participant_id} style={{ fontSize: '0.875rem' }}>
+                          {f.participant_id}: {f.reason}
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      onClick={() => { void handlePushOnly() }}
+                      disabled={running}
+                      style={{ fontSize: '0.875rem', padding: '0.35rem 0.75rem' }}
+                    >
+                      Retry push
+                    </button>
+                  </div>
+                )}
+
+                {/* Error */}
+                {finalizePhase.phase === 'error' && (
+                  <div
+                    style={{
+                      padding: '0.75rem',
+                      background: '#fff5f5',
+                      border: '1px solid #f5a0a0',
+                      borderRadius: 4,
+                      marginBottom: '0.75rem',
+                    }}
+                  >
+                    <p style={{ margin: '0 0 0.5rem', color: '#c00' }}>
+                      {finalizePhase.message}
+                    </p>
+                    {!finalizePhase.retryPushOnly && (
+                      <p style={{ margin: '0 0 0.5rem', fontSize: '0.875rem', color: '#555' }}>
+                        Nothing was pushed to the gradebook.
+                      </p>
+                    )}
+                    <button
+                      onClick={() => {
+                        void (finalizePhase.retryPushOnly ? handlePushOnly() : handleFinalize())
+                      }}
+                      disabled={running}
+                      style={{ fontSize: '0.875rem', padding: '0.35rem 0.75rem' }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                {/* Primary action button */}
+                <div style={{ marginTop: '0.5rem' }}>
+                  <button
+                    onClick={() => { void handleFinalize() }}
+                    disabled={running || guardResult.blocked || !devGameInstanceId}
+                    style={{ fontSize: '1rem', padding: '0.6rem 1.5rem' }}
+                  >
+                    {finalizePhase.phase === 'finalizing'
+                      ? 'Computing…'
+                      : finalizePhase.phase === 'pushing'
+                      ? 'Sending…'
+                      : 'Finalize Results'}
+                  </button>
+                </div>
+              </>
+            )
+          })()}
         </section>
       )}
     </main>

@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app'
 import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore'
 import { getDatabase, connectDatabaseEmulator } from 'firebase/database'
 import { getAuth, connectAuthEmulator } from 'firebase/auth'
+import { getFunctions, connectFunctionsEmulator } from 'firebase/functions'
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -18,8 +19,10 @@ const app = initializeApp(firebaseConfig)
 export const db = getFirestore(app)
 export const rtdb = getDatabase(app)
 export const auth = getAuth(app)
+export const functions = getFunctions(app)
 
 if (import.meta.env.DEV) {
+  connectFunctionsEmulator(functions, 'localhost', 5004)
   connectFirestoreEmulator(db, 'localhost', 8081)
   connectDatabaseEmulator(rtdb, 'localhost', 9001)
   connectAuthEmulator(auth, 'http://localhost:9100')

@@ -1,3 +1,6 @@
+import { httpsCallable } from 'firebase/functions'
+import { functions } from './firebase'
+
 const FUNCTIONS_BASE = import.meta.env.DEV
   ? 'http://127.0.0.1:5004/grays-mygames-live/us-central1'
   : 'https://us-central1-grays-mygames-live.cloudfunctions.net'
@@ -150,3 +153,37 @@ export const addLateParticipant = (
     'addLateParticipant',
     { ...args, participant_id: participantId, group_id: groupId },
   )
+
+// ── onCall functions (finalize + push) ────────────────────────────────────────
+// These use the Firebase SDK's httpsCallable — onCall protocol differs from
+// the plain HTTP POST pattern used by the onRequest functions above.
+
+export type FinalizeResult = {
+  ok: boolean
+  scored: { Chris: number; Kelly: number; total: number }
+}
+
+export type PushResult = {
+  ok: boolean
+  total: number
+  succeeded: number
+  failed: Array<{ participant_id: string; reason: string }>
+}
+
+const _finalizeInstance = httpsCallable<
+  { game_instance_id: string },
+  FinalizeResult
+>(functions, 'finalizeInstance')
+
+const _pushResultsToClassroom = httpsCallable<
+  { game_instance_id: string },
+  PushResult
+>(functions, 'pushResultsToClassroom')
+
+/** Computes and writes z-scores for all participants in a game instance. */
+export const finalizeInstance = (gameInstanceId: string): Promise<FinalizeResult> =>
+  _finalizeInstance({ game_instance_id: gameInstanceId }).then((r) => r.data)
+
+/** Pushes finalized scores from Firestore to the classroom gradebook. */
+export const pushResultsToClassroom = (gameInstanceId: string): Promise<PushResult> =>
+  _pushResultsToClassroom({ game_instance_id: gameInstanceId }).then((r) => r.data)
