@@ -312,6 +312,8 @@ export default function Play() {
   if (phase.name === 'off-platform-holding') {
     return (
       <Phase2OffPlatformHolding
+        groupId={phase.groupId}
+        gameInstanceId={sessionRef.current!.gameInstanceId}
         onReportOutcome={() =>
           setPhase({
             name: 'outcome-reporting',

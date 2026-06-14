@@ -1,8 +1,40 @@
+import { useEffect, useRef } from 'react'
+import { doc, onSnapshot } from 'firebase/firestore'
+import { db } from '../firebase'
+
 type Props = {
+  groupId: string
+  gameInstanceId: string
   onReportOutcome: () => void
 }
 
-export default function Phase2OffPlatformHolding({ onReportOutcome }: Props) {
+export default function Phase2OffPlatformHolding({ groupId, gameInstanceId, onReportOutcome }: Props) {
+  const calledReport = useRef(false)
+  const onReportRef = useRef(onReportOutcome)
+  onReportRef.current = onReportOutcome
+
+  // Auto-advance every member on this screen when the lead submits and status → reporting.
+  useEffect(() => {
+    return onSnapshot(
+      doc(db, 'game_instances', gameInstanceId, 'groups', groupId),
+      (snap) => {
+        if (!snap.exists()) return
+        const d = snap.data() as { status: string }
+        if (d.status === 'reporting' && !calledReport.current) {
+          calledReport.current = true
+          onReportRef.current()
+        }
+      },
+    )
+  }, [groupId, gameInstanceId]) // onReportOutcome intentionally omitted — held via ref above
+
+  const handleClick = () => {
+    if (!calledReport.current) {
+      calledReport.current = true
+      onReportRef.current()
+    }
+  }
+
   return (
     <main
       style={{
@@ -21,7 +53,7 @@ export default function Phase2OffPlatformHolding({ onReportOutcome }: Props) {
         Come back to this screen when your negotiation is complete.
       </p>
       <button
-        onClick={onReportOutcome}
+        onClick={handleClick}
         style={{ fontSize: '1rem', padding: '0.6rem 1.25rem' }}
       >
         We&apos;ve finished — report our outcome

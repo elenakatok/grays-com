@@ -1,14 +1,8 @@
 /**
- * E2E test: Start negotiation button
+ * E2E tests: negotiating status + holding-screen auto-advance
  *
  * Prerequisites: Firebase emulators + Vite dev server must be running
  * (run ./start-local.sh from the project root).
- *
- * What this tests:
- *   1. One group member taps "Start negotiation"
- *   2. Group status in Firestore becomes 'negotiating'
- *   3. The tapping member's view advances to the off-platform holding screen
- *   4. The other member's view auto-advances to the same screen
  */
 
 import { test, expect, type APIRequestContext } from '@playwright/test'
@@ -105,6 +99,59 @@ test('Start negotiation: flips group to negotiating and advances both members', 
 
   // (b) Member 2 auto-advances to the off-platform holding screen
   await page2.waitForSelector('text=Negotiate with your partner', { timeout: 10_000 })
+
+  await ctx1.close()
+  await ctx2.close()
+})
+
+test('Holding → reporting: tapper advances immediately, non-tapper auto-advances when lead submits', async ({
+  browser,
+  request,
+}) => {
+  const ts = Date.now()
+  const gameInstanceId = `e2e-hold-${ts}`
+  const groupId = `grp-${ts}`
+  const pid1 = `p1-${ts}` // Chris, lead
+  const pid2 = `p2-${ts}` // Kelly, non-lead
+
+  // Seed as matched, then flip to negotiating so resume routing sends both to holding screen.
+  await seedGroup(request, gameInstanceId, groupId, pid1, pid2)
+  const negRes = await request.post(`${FUNCTIONS_BASE}/startNegotiation`, {
+    data: { _test: { participant_id: pid1, game_instance_id: gameInstanceId } },
+  })
+  if (!negRes.ok()) throw new Error(`startNegotiation failed: ${negRes.status()} ${await negRes.text()}`)
+
+  // Both users navigate — resume routing sees negotiating → off-platform-holding.
+  const ctx1 = await browser.newContext()
+  const ctx2 = await browser.newContext()
+  const page1 = await ctx1.newPage()
+  const page2 = await ctx2.newPage()
+
+  const url = (pid: string) =>
+    `/play?_dev_participant_id=${pid}&_dev_game_instance_id=${gameInstanceId}`
+
+  await Promise.all([page1.goto(url(pid1)), page2.goto(url(pid2))])
+
+  await Promise.all([
+    page1.waitForSelector('text=Negotiate with your partner', { timeout: 15_000 }),
+    page2.waitForSelector('text=Negotiate with your partner', { timeout: 15_000 }),
+  ])
+
+  // ── Lead (pid1) taps the button → must advance without a reload ──────────
+  await page1.click("button:has-text(\"We've finished\")")
+  await page1.waitForSelector('text=Report outcome', { timeout: 10_000 })
+
+  // ── Lead submits an outcome via the API, which flips status → reporting ──
+  // This simulates the lead filling in a price on the outcome-reporting screen.
+  const submitRes = await request.post(`${FUNCTIONS_BASE}/submitLeadOutcome`, {
+    data: { _test: { participant_id: pid1, game_instance_id: gameInstanceId }, price: 120 },
+  })
+  if (!submitRes.ok()) throw new Error(`submitLeadOutcome failed: ${submitRes.status()} ${await submitRes.text()}`)
+
+  // ── Non-lead (pid2) must auto-advance from holding screen ─────────────────
+  // The onSnapshot listener in Phase2OffPlatformHolding detects status === 'reporting'
+  // and calls onReportOutcome without any user tap or page reload.
+  await page2.waitForSelector('text=Confirm the outcome', { timeout: 10_000 })
 
   await ctx1.close()
   await ctx2.close()

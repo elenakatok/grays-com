@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:e2e": "playwright test"
+    "test:e2e": "node node_modules/@playwright/test/cli.js test"
   },
   "dependencies": {
     "firebase": "^12.13.0",
