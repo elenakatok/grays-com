@@ -156,3 +156,63 @@ test('Holding → reporting: tapper advances immediately, non-tapper auto-advanc
   await ctx1.close()
   await ctx2.close()
 })
+
+test('Lead routing: lead reaches outcome-entry (not waiting screen) when is_lead was stale at page load', async ({
+  browser,
+  request,
+}) => {
+  // This test reproduces the real-game bug where students load the page before matching
+  // runs, so is_lead is not yet set in their participant docs. The holding screen must
+  // derive lead status from the group doc (lead_participant_id) rather than the stale
+  // session ref.
+  const ts = Date.now()
+  const gameInstanceId = `e2e-lead-route-${ts}`
+  const groupId = `grp-${ts}`
+  const pid1 = `p1-${ts}` // Chris — actual lead in group doc, but doc_is_lead: false (stale)
+  const pid2 = `p2-${ts}` // Kelly
+
+  // Seed: group doc has lead_participant_id: pid1 (correct), but participant docs both
+  // have is_lead: false (simulating the pre-matching stale state).
+  const seedRes = await request.post(`${FUNCTIONS_BASE}/seedTestGroup`, {
+    data: {
+      game_instance_id: gameInstanceId,
+      group_id: groupId,
+      initial_status: 'negotiating',
+      participants: [
+        { id: pid1, role: 'Chris', is_lead: true, doc_is_lead: false, display_name: 'Alice' },
+        { id: pid2, role: 'Kelly', is_lead: false, display_name: 'Bob' },
+      ],
+    },
+  })
+  if (!seedRes.ok()) throw new Error(`seedTestGroup failed: ${seedRes.status()} ${await seedRes.text()}`)
+
+  // Both navigate — resume routing sees negotiating → off-platform-holding.
+  // Because is_lead=false in both participant docs, the session ref has isLead=false for everyone.
+  const ctx1 = await browser.newContext()
+  const ctx2 = await browser.newContext()
+  const page1 = await ctx1.newPage() // actual lead
+  const page2 = await ctx2.newPage() // non-lead
+
+  const url = (pid: string) =>
+    `/play?_dev_participant_id=${pid}&_dev_game_instance_id=${gameInstanceId}`
+
+  await Promise.all([page1.goto(url(pid1)), page2.goto(url(pid2))])
+
+  await Promise.all([
+    page1.waitForSelector('text=Negotiate with your partner', { timeout: 15_000 }),
+    page2.waitForSelector('text=Negotiate with your partner', { timeout: 15_000 }),
+  ])
+
+  // ── Lead taps the button — must land on the LEAD outcome-entry form, not the waiting screen ──
+  await page1.click("button:has-text(\"We've finished\")")
+  // "Report outcome" is the lead entry form heading. "Your group lead is reporting" is the non-lead screen.
+  await page1.waitForSelector('text=Report outcome', { timeout: 10_000 })
+  // Confirm the non-lead waiting screen is NOT shown to the lead.
+  await expect(page1.locator('text=Your group lead is reporting')).not.toBeVisible()
+
+  // Kelly has not tapped and no submit has happened, so she stays on the holding screen.
+  await expect(page2.locator('text=Negotiate with your partner')).toBeVisible()
+
+  await ctx1.close()
+  await ctx2.close()
+})

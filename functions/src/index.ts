@@ -681,7 +681,15 @@ export const seedTestGroup = onRequest(async (req, res) => {
   const body = req.body as {
     game_instance_id: string
     group_id: string
-    participants: Array<{ id: string; role: 'Chris' | 'Kelly'; is_lead: boolean; display_name: string }>
+    initial_status?: string
+    participants: Array<{
+      id: string
+      role: 'Chris' | 'Kelly'
+      is_lead: boolean
+      /** Overrides the is_lead value written to the participant doc (defaults to is_lead). */
+      doc_is_lead?: boolean
+      display_name: string
+    }>
   }
 
   const { game_instance_id: gameInstanceId, group_id: groupId, participants } = body
@@ -704,7 +712,7 @@ export const seedTestGroup = onRequest(async (req, res) => {
   batch.set(instanceRef, { status: 'active' }, { merge: true })
 
   batch.set(groupRef, {
-    status: 'matched',
+    status: body.initial_status ?? 'matched',
     chris_participants: chrisPids,
     kelly_participants: kellyPids,
     lead_participant_id: lead.id,
@@ -722,7 +730,7 @@ export const seedTestGroup = onRequest(async (req, res) => {
       participant_id: p.id,
       game_instance_id: gameInstanceId,
       role: p.role,
-      is_lead: p.is_lead,
+      is_lead: p.doc_is_lead !== undefined ? p.doc_is_lead : p.is_lead,
       prep_status: 'complete',
       attendance_confirmed_at: Timestamp.now(),
       confirmed_ready_at: Timestamp.now(),

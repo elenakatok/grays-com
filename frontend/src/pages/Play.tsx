@@ -314,13 +314,14 @@ export default function Play() {
       <Phase2OffPlatformHolding
         groupId={phase.groupId}
         gameInstanceId={sessionRef.current!.gameInstanceId}
-        onReportOutcome={() =>
+        participantId={sessionRef.current!.participantId}
+        onReportOutcome={(isLead) =>
           setPhase({
             name: 'outcome-reporting',
             groupId: phase.groupId,
             participantId: sessionRef.current!.participantId,
             gameInstanceId: sessionRef.current!.gameInstanceId,
-            isLead: phase.isLead,
+            isLead,
           })
         }
       />
