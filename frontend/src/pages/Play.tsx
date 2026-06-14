@@ -132,6 +132,12 @@ export default function Play() {
                       gameInstanceId: game_instance_id,
                       isLead: sessionRef.current.isLead,
                     })
+                  } else if (groupStatus === 'negotiating') {
+                    setPhase({
+                      name: 'off-platform-holding',
+                      groupId: pdata.group_id as string,
+                      isLead: sessionRef.current.isLead,
+                    })
                   } else {
                     // 'matched' or unknown — show group reveal
                     setPhase({
@@ -291,6 +297,7 @@ export default function Play() {
         groupId={phase.groupId}
         participantId={phase.participantId}
         gameInstanceId={phase.gameInstanceId}
+        callArgs={callArgsRef.current!}
         onContinue={() =>
           setPhase({
             name: 'off-platform-holding',

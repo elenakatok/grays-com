@@ -57,6 +57,14 @@ test('deadlocked group blocks finalize', () => {
   }
 })
 
+test('negotiating group blocks finalize', () => {
+  const result = checkAllGroupsComplete([g('completed'), g('negotiating')])
+  assert.equal(result.blocked, true)
+  if (result.blocked) {
+    assert.ok(result.message.includes('negotiating'))
+  }
+})
+
 test('reconciling group blocks finalize (future status handled generically)', () => {
   const result = checkAllGroupsComplete([g('reconciling')])
   assert.equal(result.blocked, true)

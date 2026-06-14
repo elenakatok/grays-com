@@ -87,7 +87,7 @@ export const triggerMatching = (args: InstructorDevArgs) =>
 
 export type GroupStatusResult = {
   group_id: string
-  status: 'matched' | 'reporting' | 'completed' | 'deadlocked'
+  status: 'matched' | 'negotiating' | 'reporting' | 'completed' | 'deadlocked'
   disagree_count: number
   lead_outcome: { price: number | null; no_deal: boolean } | null
   confirmations: Record<string, 'pending' | 'confirmed' | 'disagreed'>
@@ -98,6 +98,10 @@ export type GroupStatusResult = {
   kelly_participants: string[]
   lead_participant_id: string
 }
+
+/** Any group member taps "Start negotiation" — flips group from matched → negotiating. Idempotent. */
+export const startNegotiation = (args: CallArgs) =>
+  callFunction<{ ok: boolean }>('startNegotiation', args)
 
 /** Lead reports price (number) or no-deal (null). */
 export const submitLeadOutcome = (args: CallArgs, price: number | null) =>

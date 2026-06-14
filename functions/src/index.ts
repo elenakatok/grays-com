@@ -662,7 +662,137 @@ function extractStudentIds(
   return { participantId: payload.participant_id, gameInstanceId: payload.game_instance_id }
 }
 
+// ── Emulator-only test seed ───────────────────────────────────────────────────
+
+/**
+ * Seeds a matched group for e2e tests. Only available in the Functions emulator.
+ *
+ * Request body: {
+ *   game_instance_id, group_id,
+ *   participants: Array<{ id, role, is_lead, display_name }>
+ * }
+ */
+export const seedTestGroup = onRequest(async (req, res) => {
+  if (process.env.FUNCTIONS_EMULATOR !== 'true') {
+    res.status(404).json({ error: 'Not found' }); return
+  }
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+
+  const body = req.body as {
+    game_instance_id: string
+    group_id: string
+    participants: Array<{ id: string; role: 'Chris' | 'Kelly'; is_lead: boolean; display_name: string }>
+  }
+
+  const { game_instance_id: gameInstanceId, group_id: groupId, participants } = body
+  if (!gameInstanceId || !groupId || !Array.isArray(participants)) {
+    res.status(400).json({ error: 'Missing required fields' }); return
+  }
+
+  const db = admin.firestore()
+  const rtdb = admin.database()
+  const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+  const groupRef = instanceRef.collection('groups').doc(groupId)
+
+  const chrisPids = participants.filter((p) => p.role === 'Chris').map((p) => p.id)
+  const kellyPids = participants.filter((p) => p.role === 'Kelly').map((p) => p.id)
+  const lead = participants.find((p) => p.is_lead)
+  if (!lead) { res.status(400).json({ error: 'No lead participant' }); return }
+
+  const batch = db.batch()
+
+  batch.set(instanceRef, { status: 'active' }, { merge: true })
+
+  batch.set(groupRef, {
+    status: 'matched',
+    chris_participants: chrisPids,
+    kelly_participants: kellyPids,
+    lead_participant_id: lead.id,
+    disagree_count: 0,
+    lead_outcome: null,
+    confirmations: {},
+    agreement_reached: null,
+    final_price: null,
+    instructor_override: false,
+  })
+
+  for (const p of participants) {
+    const pRef = instanceRef.collection('participants').doc(p.id)
+    batch.set(pRef, {
+      participant_id: p.id,
+      game_instance_id: gameInstanceId,
+      role: p.role,
+      is_lead: p.is_lead,
+      prep_status: 'complete',
+      attendance_confirmed_at: Timestamp.now(),
+      confirmed_ready_at: Timestamp.now(),
+      group_id: groupId,
+      display_name: p.display_name,
+    })
+  }
+
+  await batch.commit()
+
+  // Seed RTDB attending records for display names on the reveal screen.
+  const attendingRef = rtdb.ref(`attending/${gameInstanceId}`)
+  await Promise.all(
+    participants.map((p) =>
+      attendingRef.child(p.id).set({ display_name: p.display_name, role: p.role }),
+    ),
+  )
+
+  res.json({ ok: true })
+})
+
 // ── Outcome reporting ─────────────────────────────────────────────────────────
+
+/**
+ * Any group member taps "Start negotiation" — transitions the group from
+ * matched → negotiating. Idempotent: if already negotiating, returns ok.
+ *
+ * Request body: { token | _test }
+ */
+export const startNegotiation = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const ids = extractStudentIds(body, isEmulator, res)
+  if (!ids) return
+  const { participantId, gameInstanceId } = ids
+
+  try {
+    const db = admin.firestore()
+    const pSnap = await db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('participants').doc(participantId).get()
+    if (!pSnap.exists) { res.status(404).json({ error: 'Participant not found.' }); return }
+    const pdata = pSnap.data()!
+    if (!pdata.group_id) { res.status(400).json({ error: 'Not in a group.' }); return }
+
+    const groupRef = db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('groups').doc(pdata.group_id as string)
+
+    await db.runTransaction(async (tx) => {
+      const gSnap = await tx.get(groupRef)
+      const gdata = gSnap.data()!
+      if (gdata.status === 'matched') {
+        tx.update(groupRef, { status: 'negotiating', negotiation_started_at: Timestamp.now() })
+      } else if (gdata.status !== 'negotiating') {
+        throw Object.assign(
+          new Error(`Cannot start negotiation — group is '${gdata.status as string}'.`),
+          { status: 409 },
+        )
+      }
+      // Already 'negotiating' — idempotent, do nothing
+    })
+    res.json({ ok: true })
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    const message = err instanceof Error ? err.message : 'Internal error'
+    res.status(status).json({ error: message })
+  }
+})
 
 /**
  * Lead reports the group's outcome: a price (agreement) or null (no deal).

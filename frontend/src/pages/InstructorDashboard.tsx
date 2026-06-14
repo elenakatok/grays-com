@@ -460,7 +460,8 @@ export default function InstructorDashboard() {
               const members = [...chrisLabels, ...kellyLabels].join(' + ')
 
               const statusLabel: Record<string, string> = {
-                matched: 'Waiting to report',
+                matched: 'Waiting to start',
+                negotiating: 'Negotiating…',
                 reporting: 'Reporting…',
                 completed: g.agreement_reached
                   ? `Deal at ${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(g.final_price!)}`

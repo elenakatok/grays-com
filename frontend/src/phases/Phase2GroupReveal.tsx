@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react'
-import { doc, getDoc } from 'firebase/firestore'
+import { useEffect, useRef, useState } from 'react'
+import { doc, getDoc, onSnapshot } from 'firebase/firestore'
 import { ref, get } from 'firebase/database'
 import { db, rtdb } from '../firebase'
+import { type CallArgs, startNegotiation } from '../api'
 
 type Props = {
   groupId: string
   participantId: string
   gameInstanceId: string
+  callArgs: CallArgs
   onContinue: () => void
 }
 
@@ -26,10 +28,33 @@ export default function Phase2GroupReveal({
   groupId,
   participantId,
   gameInstanceId,
+  callArgs,
   onContinue,
 }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' })
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
 
+  const calledContinue = useRef(false)
+  const onContinueRef = useRef(onContinue)
+  onContinueRef.current = onContinue
+
+  // Real-time listener: auto-advance any member when group flips to negotiating.
+  useEffect(() => {
+    return onSnapshot(
+      doc(db, 'game_instances', gameInstanceId, 'groups', groupId),
+      (snap) => {
+        if (!snap.exists()) return
+        const d = snap.data() as { status: string }
+        if (d.status === 'negotiating' && !calledContinue.current) {
+          calledContinue.current = true
+          onContinueRef.current()
+        }
+      },
+    )
+  }, [groupId, gameInstanceId]) // onContinue intentionally omitted — held via ref above
+
+  // One-time load of member list and display names.
   useEffect(() => {
     let cancelled = false
 
@@ -83,6 +108,22 @@ export default function Phase2GroupReveal({
     }
   }, [groupId, gameInstanceId])
 
+  const handleStartNegotiation = () => {
+    setStarting(true)
+    setStartError(null)
+    startNegotiation(callArgs)
+      .then(() => {
+        if (!calledContinue.current) {
+          calledContinue.current = true
+          onContinueRef.current()
+        }
+      })
+      .catch((err: unknown) => {
+        setStartError(err instanceof Error ? err.message : 'Failed to start negotiation.')
+        setStarting(false)
+      })
+  }
+
   if (state.status === 'loading') {
     return (
       <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto', fontFamily: 'sans-serif' }}>
@@ -124,10 +165,19 @@ export default function Phase2GroupReveal({
           </li>
         ))}
       </ul>
-      <p style={{ fontSize: '1.05rem', lineHeight: 1.6, marginBottom: '1.75rem' }}>
-        Find them in class and begin your negotiation.
+      <p style={{ fontSize: '1.05rem', lineHeight: 1.6, marginBottom: '0.5rem' }}>
+        Find your group, then tap this when you begin.
       </p>
-      <button onClick={onContinue}>Continue</button>
+      {startError && (
+        <p style={{ color: '#c00', marginBottom: '0.75rem' }}>{startError}</p>
+      )}
+      <button
+        onClick={handleStartNegotiation}
+        disabled={starting}
+        style={{ fontSize: '1rem', padding: '0.6rem 1.25rem' }}
+      >
+        {starting ? 'Starting…' : 'Start negotiation'}
+      </button>
     </main>
   )
 }
