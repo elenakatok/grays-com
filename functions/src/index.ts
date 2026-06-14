@@ -752,6 +752,52 @@ export const seedTestGroup = onRequest(async (req, res) => {
   res.json({ ok: true })
 })
 
+/**
+ * Seeds a single unmatched (late) participant for e2e tests. The participant
+ * doc is created without a group_id so addLateParticipant can be tested.
+ * Only available in the Functions emulator.
+ *
+ * Request body: { game_instance_id, participant_id, role, display_name }
+ */
+export const seedLatecomer = onRequest(async (req, res) => {
+  if (process.env.FUNCTIONS_EMULATOR !== 'true') {
+    res.status(404).json({ error: 'Not found' }); return
+  }
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+
+  const body = req.body as {
+    game_instance_id: string
+    participant_id: string
+    role: 'Chris' | 'Kelly'
+    display_name: string
+  }
+
+  const { game_instance_id: gameInstanceId, participant_id: participantId, role, display_name: displayName } = body
+  if (!gameInstanceId || !participantId || !role || !displayName) {
+    res.status(400).json({ error: 'Missing required fields' }); return
+  }
+
+  const db = admin.firestore()
+  await db
+    .collection('game_instances')
+    .doc(gameInstanceId)
+    .collection('participants')
+    .doc(participantId)
+    .set({
+      participant_id: participantId,
+      game_instance_id: gameInstanceId,
+      role,
+      is_lead: false,
+      prep_status: 'complete',
+      attendance_confirmed_at: Timestamp.now(),
+      confirmed_ready_at: Timestamp.now(),
+      display_name: displayName,
+      // No group_id — this participant has not been matched yet
+    })
+
+  res.json({ ok: true })
+})
+
 // ── Outcome reporting ─────────────────────────────────────────────────────────
 
 /**
@@ -1198,8 +1244,8 @@ export const addLateParticipant = onRequest(async (req, res) => {
           { status: 409 },
         )
       }
-      // Re-check total cap.
-      if (total >= 3) {
+      // Re-check total cap (max 2C+2K = 4).
+      if (total >= 4) {
         throw Object.assign(
           new Error(
             `Group is now full (${chrisIds.length}C+${kellyIds.length}K). ` +

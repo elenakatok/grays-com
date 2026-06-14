@@ -7,18 +7,17 @@
  *
  * Eligibility rules for a target group:
  *   - status === 'matched'  (holding screen — negotiation has NOT started)
- *   - total members after adding <= 3  (overall cap)
- *   - count of the latecomer's role after adding <= 2  (role cap)
- *   - result composition must be 2C+1K or 1C+2K  (never same-role-only, never 4)
+ *   - count of the latecomer's role after adding <= 2  (per-role cap)
+ *   - total members after adding <= 4  (2C+2K overall cap)
  *
- * In practice, only 1C+1K groups (total = 2) are ever eligible: any group
- * already at 3 hits the total cap, and any group with 2 of one role hits
- * the role cap before total matters.
+ * The status guard is the most regression-prone rule: any group whose status
+ * is not exactly 'matched' (i.e. negotiating, reporting, deadlocked, completed)
+ * is permanently closed to latecomers regardless of available slots.
  */
 
 export type GroupSnapshot = {
   group_id: string
-  status: string               // 'matched' | 'reporting' | 'deadlocked' | 'completed'
+  status: string               // 'matched' | 'negotiating' | 'reporting' | 'deadlocked' | 'completed'
   chris_participants: string[]
   kelly_participants: string[]
 }
@@ -33,6 +32,11 @@ export type LateGroupSuggestion = {
 /**
  * Returns every group that can legally accept one more participant of the
  * given role, sorted smallest-total first (fill smaller groups before larger).
+ *
+ * A group is eligible if and only if:
+ *   1. status === 'matched'  (NOT negotiating/reporting/deadlocked/completed)
+ *   2. fewer than 2 of the latecomer's role already in the group
+ *   3. total members < 4  (adding one would not exceed 2C+2K)
  */
 export function eligibleGroupsForRole(
   role: 'Chris' | 'Kelly',
@@ -42,7 +46,7 @@ export function eligibleGroupsForRole(
     .filter((g) => {
       if (g.status !== 'matched') return false
       const total = g.chris_participants.length + g.kelly_participants.length
-      if (total >= 3) return false
+      if (total >= 4) return false
       if (role === 'Chris' && g.chris_participants.length >= 2) return false
       if (role === 'Kelly' && g.kelly_participants.length >= 2) return false
       return true

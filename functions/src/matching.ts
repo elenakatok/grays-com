@@ -2,12 +2,16 @@
  * Grays.com matching algorithm.
  *
  * Standard group: 1 Chris + 1 Kelly.
- * Remainder rule: extra players in the larger role are distributed among
- * existing C+K groups rather than left out or paired together.
+ * Cap: max 2 Chris + 2 Kelly per group (four students total).
+ * Remainder rule: extra players in the larger role are distributed into existing
+ * C+K groups (up to 2 of that role per group) rather than left out or paired
+ * same-role. A group is only opened to extras once all groups already hold 2 of
+ * that role.
  *
  * Examples:
  *   17C + 15K → 13 groups of 1C+1K, plus 2 groups of 2C+1K
  *   14C + 16K → 12 groups of 1C+1K, plus 2 groups of 1C+2K
+ *    7C +  3K →  1 group  of 2C+1K, plus 2 groups of 2C+1K  (c7 unmatched — no Kelly slot)
  */
 
 export type MatchParticipant = {
@@ -44,19 +48,37 @@ export function matchParticipants(eligible: MatchParticipant[]): MatchGroup[] {
     })
   }
 
-  // Distribute extras into existing groups
-  const extraChrises = chrises.slice(pairCount)
-  const extraKellys = kellys.slice(pairCount)
-
-  extraChrises.forEach((id, i) => {
-    groups[i % groups.length].chris_participants.push(id)
-  })
-
-  extraKellys.forEach((id, i) => {
-    groups[i % groups.length].kelly_participants.push(id)
-  })
+  // Distribute extras round-robin, skipping groups already at the per-role cap.
+  distributeExtras(chrises.slice(pairCount), groups, 'chris_participants')
+  distributeExtras(kellys.slice(pairCount), groups, 'kelly_participants')
 
   return groups
+}
+
+/**
+ * Distributes ids into groups in round-robin order, respecting a per-role cap
+ * of 2. Stops early if all groups are at the cap — remaining ids are left
+ * unmatched (they appear in getUnmatchedParticipants for the instructor).
+ */
+function distributeExtras(
+  ids: string[],
+  groups: MatchGroup[],
+  key: 'chris_participants' | 'kelly_participants',
+): void {
+  let cursor = 0
+  for (const id of ids) {
+    let placed = false
+    for (let attempt = 0; attempt < groups.length; attempt++) {
+      const g = groups[(cursor + attempt) % groups.length]
+      if (g[key].length < 2) {
+        g[key].push(id)
+        cursor = (cursor + attempt + 1) % groups.length
+        placed = true
+        break
+      }
+    }
+    if (!placed) break  // All groups at role cap; remaining extras cannot be placed
+  }
 }
 
 function shuffle<T>(arr: T[]): void {

@@ -49,6 +49,11 @@ test('1C+1K reporting → NOT eligible (negotiation started)', () => {
   assert.deepEqual(eligibleGroupsForRole('Kelly', [g('g1', 'reporting', 1, 1)]), [])
 })
 
+test('1C+1K negotiating → NOT eligible (status guard)', () => {
+  assert.deepEqual(eligibleGroupsForRole('Chris', [g('g1', 'negotiating', 1, 1)]), [])
+  assert.deepEqual(eligibleGroupsForRole('Kelly', [g('g1', 'negotiating', 1, 1)]), [])
+})
+
 test('1C+1K completed → NOT eligible', () => {
   assert.deepEqual(eligibleGroupsForRole('Chris', [g('g1', 'completed', 1, 1)]), [])
   assert.deepEqual(eligibleGroupsForRole('Kelly', [g('g1', 'completed', 1, 1)]), [])
@@ -59,24 +64,34 @@ test('1C+1K deadlocked → NOT eligible', () => {
   assert.deepEqual(eligibleGroupsForRole('Kelly', [g('g1', 'deadlocked', 1, 1)]), [])
 })
 
-test('2C+1K matched (total=3) → NOT eligible for Chris (role cap hit)', () => {
+test('2C+1K matched → NOT eligible for Chris (role cap: already 2 Chrises)', () => {
   assert.deepEqual(eligibleGroupsForRole('Chris', [g('g1', 'matched', 2, 1)]), [])
 })
 
-test('2C+1K matched (total=3) → NOT eligible for Kelly (total cap hit)', () => {
-  assert.deepEqual(eligibleGroupsForRole('Kelly', [g('g1', 'matched', 2, 1)]), [])
+test('2C+1K matched → eligible for Kelly (can fill to 2C+2K)', () => {
+  const result = eligibleGroupsForRole('Kelly', [g('g1', 'matched', 2, 1)])
+  assert.equal(result.length, 1)
+  assert.equal(result[0].group_id, 'g1')
 })
 
-test('1C+2K matched (total=3) → NOT eligible for Chris (total cap hit)', () => {
-  assert.deepEqual(eligibleGroupsForRole('Chris', [g('g1', 'matched', 1, 2)]), [])
+test('1C+2K matched → eligible for Chris (can fill to 2C+2K)', () => {
+  const result = eligibleGroupsForRole('Chris', [g('g1', 'matched', 1, 2)])
+  assert.equal(result.length, 1)
+  assert.equal(result[0].group_id, 'g1')
 })
 
-test('1C+2K matched (total=3) → NOT eligible for Kelly (role cap hit)', () => {
+test('1C+2K matched → NOT eligible for Kelly (role cap: already 2 Kellys)', () => {
   assert.deepEqual(eligibleGroupsForRole('Kelly', [g('g1', 'matched', 1, 2)]), [])
+})
+
+test('2C+2K matched (full, total=4) → NOT eligible for either role', () => {
+  assert.deepEqual(eligibleGroupsForRole('Chris', [g('g1', 'matched', 2, 2)]), [])
+  assert.deepEqual(eligibleGroupsForRole('Kelly', [g('g1', 'matched', 2, 2)]), [])
 })
 
 test('mixed statuses → only matched groups returned', () => {
   const groups = [
+    g('negotiating', 'negotiating', 1, 1),
     g('reporting', 'reporting', 1, 1),
     g('matched', 'matched', 1, 1),
     g('completed', 'completed', 1, 1),
@@ -88,8 +103,7 @@ test('mixed statuses → only matched groups returned', () => {
 })
 
 test('sort: smaller groups come first', () => {
-  // All three are hypothetical but test the sort — in practice all eligible are 1C+1K.
-  // 1C+0K (total=1) < 1C+1K (total=2) — both are under the total cap of 3
+  // 1C+0K (total=1) < 1C+1K (total=2) — both are under the total cap of 4
   const groups = [
     g('big', 'matched', 1, 1),   // total 2
     g('small', 'matched', 1, 0), // total 1
@@ -105,9 +119,10 @@ test('sort: smaller groups come first', () => {
 test('no eligible groups → null', () => {
   assert.equal(suggestGroupForLatecomer('Chris', []), null)
   assert.equal(suggestGroupForLatecomer('Kelly', [g('g1', 'reporting', 1, 1)]), null)
+  assert.equal(suggestGroupForLatecomer('Kelly', [g('g1', 'negotiating', 1, 1)]), null)
 })
 
-test('suggest for Chris: composition shows 2C+1K', () => {
+test('suggest for Chris on 1C+1K: composition shows 2C+1K', () => {
   const suggestion = suggestGroupForLatecomer('Chris', [g('g1', 'matched', 1, 1)])
   assert.ok(suggestion !== null)
   assert.equal(suggestion.group_id, 'g1')
@@ -116,11 +131,25 @@ test('suggest for Chris: composition shows 2C+1K', () => {
   assert.equal(suggestion.result_composition, '2C+1K')
 })
 
-test('suggest for Kelly: composition shows 1C+2K', () => {
+test('suggest for Kelly on 1C+1K: composition shows 1C+2K', () => {
   const suggestion = suggestGroupForLatecomer('Kelly', [g('g1', 'matched', 1, 1)])
   assert.ok(suggestion !== null)
   assert.equal(suggestion.group_id, 'g1')
   assert.equal(suggestion.result_composition, '1C+2K')
+})
+
+test('suggest for Kelly on 2C+1K: composition shows 2C+2K', () => {
+  const suggestion = suggestGroupForLatecomer('Kelly', [g('g1', 'matched', 2, 1)])
+  assert.ok(suggestion !== null)
+  assert.equal(suggestion.group_id, 'g1')
+  assert.equal(suggestion.result_composition, '2C+2K')
+})
+
+test('suggest for Chris on 1C+2K: composition shows 2C+2K', () => {
+  const suggestion = suggestGroupForLatecomer('Chris', [g('g1', 'matched', 1, 2)])
+  assert.ok(suggestion !== null)
+  assert.equal(suggestion.group_id, 'g1')
+  assert.equal(suggestion.result_composition, '2C+2K')
 })
 
 test('multiple eligible groups: returns the smallest (prefer filling 1C+1K)', () => {
@@ -135,17 +164,26 @@ test('multiple eligible groups: returns the smallest (prefer filling 1C+1K)', ()
   assert.ok(['g1', 'g2'].includes(suggestion.group_id))
 })
 
-test('all groups at cap (total=3) → null suggestion', () => {
+test('all groups at 2C+2K cap → null suggestion for either role', () => {
   const groups = [
-    g('a', 'matched', 2, 1),  // 2C+1K — Chris cap + total cap
-    g('b', 'matched', 1, 2),  // 1C+2K — Kelly cap + total cap
+    g('a', 'matched', 2, 2),
+    g('b', 'matched', 2, 2),
   ]
   assert.equal(suggestGroupForLatecomer('Chris', groups), null)
   assert.equal(suggestGroupForLatecomer('Kelly', groups), null)
 })
 
+test('Chris role cap hit but Kelly slot open: Chris null, Kelly suggested', () => {
+  const groups = [g('a', 'matched', 2, 1)]
+  assert.equal(suggestGroupForLatecomer('Chris', groups), null)
+  const s = suggestGroupForLatecomer('Kelly', groups)
+  assert.ok(s !== null)
+  assert.equal(s.result_composition, '2C+2K')
+})
+
 test('ineligible-status groups beside eligible: only eligible suggested', () => {
   const groups = [
+    g('negotiating', 'negotiating', 1, 1),
     g('reporting', 'reporting', 1, 1),
     g('eligible', 'matched', 1, 1),
     g('completed', 'completed', 1, 1),

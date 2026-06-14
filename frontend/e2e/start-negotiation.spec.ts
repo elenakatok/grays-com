@@ -216,3 +216,55 @@ test('Lead routing: lead reaches outcome-entry (not waiting screen) when is_lead
   await ctx1.close()
   await ctx2.close()
 })
+
+// ── Latecomer guard ───────────────────────────────────────────────────────────
+
+test('addLateParticipant: latecomer cannot be added to a negotiating group', async ({
+  request,
+}) => {
+  // This test verifies the most regression-prone rule: a group whose status is
+  // not exactly 'matched' is closed to latecomers regardless of available slots.
+  const ts = Date.now()
+  const gameInstanceId = `e2e-late-guard-${ts}`
+  const groupId = `grp-${ts}`
+  const pid1 = `p1-${ts}`
+  const pid2 = `p2-${ts}`
+  const latePid = `late-${ts}`
+
+  // Seed a negotiating group (has 1 open Chris slot, but status is 'negotiating').
+  const seedRes = await request.post(`${FUNCTIONS_BASE}/seedTestGroup`, {
+    data: {
+      game_instance_id: gameInstanceId,
+      group_id: groupId,
+      initial_status: 'negotiating',
+      participants: [
+        { id: pid1, role: 'Chris', is_lead: true, display_name: 'Alice' },
+        { id: pid2, role: 'Kelly', is_lead: false, display_name: 'Bob' },
+      ],
+    },
+  })
+  if (!seedRes.ok()) throw new Error(`seedTestGroup failed: ${seedRes.status()} ${await seedRes.text()}`)
+
+  // Seed the latecomer as an unmatched participant (no group_id).
+  const lateRes = await request.post(`${FUNCTIONS_BASE}/seedLatecomer`, {
+    data: {
+      game_instance_id: gameInstanceId,
+      participant_id: latePid,
+      role: 'Chris',
+      display_name: 'Charlie',
+    },
+  })
+  if (!lateRes.ok()) throw new Error(`seedLatecomer failed: ${lateRes.status()} ${await lateRes.text()}`)
+
+  // Attempt to add the latecomer to the negotiating group — must be rejected.
+  const addRes = await request.post(`${FUNCTIONS_BASE}/addLateParticipant`, {
+    data: {
+      _dev: { game_instance_id: gameInstanceId },
+      participant_id: latePid,
+      group_id: groupId,
+    },
+  })
+  expect(addRes.status()).toBe(409)
+  const body = (await addRes.json()) as { error: string }
+  expect(body.error).toMatch(/negotiation has already started/)
+})
