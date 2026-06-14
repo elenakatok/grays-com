@@ -222,6 +222,18 @@ export default function DevLauncher() {
   const [simResult, setSimResult] = useState<{ chris: number; kelly: number } | null>(null)
   const [simError, setSimError] = useState<string | null>(null)
 
+  // ── Concern C state ───────────────────────────────────────────────
+  const [stageN, setStageN] = useState('20')
+  const [stageBusy, setStageBusy] = useState(false)
+  const [stageProgress, setStageProgress] = useState<string | null>(null)
+  const [stageResult, setStageResult] = useState<{
+    stage: string; students: number; groups?: number
+    walk_aways?: number; no_shows?: number
+    price_min?: number | null; price_max?: number | null
+    price_range?: { chris_reservation: number; kelly_reservation: number }
+  } | null>(null)
+  const [stageError, setStageError] = useState<string | null>(null)
+
   // ── Concern B state ───────────────────────────────────────────────
   const [interactiveN, setInteractiveN] = useState(4)
   const [participants, setParticipants] = useState<Participant[] | null>(null)
@@ -353,6 +365,44 @@ export default function DevLauncher() {
     } finally {
       setSimBusy(false)
       setSimProgress(null)
+    }
+  }
+
+  // ── Concern C: simulate at scale ─────────────────────────────────
+
+  const runStage = async (stage: string) => {
+    const n = parseInt(stageN, 10)
+    if (isNaN(n) || n < 2 || n > 200) {
+      setStageError('N must be an integer between 2 and 200')
+      return
+    }
+    setStageBusy(true)
+    setStageProgress(`Seeding ${n} students → "${stage}"…`)
+    setStageResult(null)
+    setStageError(null)
+    try {
+      const res = await fetch(`${FUNCTIONS_EMULATOR}/seedSimulatedGame`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ game_instance_id: instanceId, stage, n }),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        throw new Error(`seedSimulatedGame → HTTP ${res.status}: ${text.slice(0, 200)}`)
+      }
+      const data = await res.json() as {
+        stage: string; students: number; groups?: number
+        walk_aways?: number; no_shows?: number
+        price_min?: number | null; price_max?: number | null
+        price_range?: { chris_reservation: number; kelly_reservation: number }
+      }
+      setStageResult(data)
+      await loadParticipants(instanceId)
+    } catch (err) {
+      setStageError(err instanceof Error ? err.message : 'Failed — are emulators running?')
+    } finally {
+      setStageBusy(false)
+      setStageProgress(null)
     }
   }
 
@@ -500,6 +550,84 @@ export default function DevLauncher() {
         )}
         {simError && (
           <p style={{ margin: '0.5rem 0 0', color: '#c00', fontSize: '0.825rem' }}>{simError}</p>
+        )}
+      </section>
+
+      {/* ── C: Simulate at scale ─────────────────────────────────────── */}
+      <section style={{
+        marginBottom: '2rem', padding: '1rem 1.25rem',
+        border: '1px solid #b8d9b8', borderRadius: 6, background: '#f4faf4',
+      }}>
+        <h2 style={{ margin: '0 0 0.35rem', fontSize: '1rem' }}>
+          C — Simulate at scale (no windows)
+        </h2>
+        <p style={{ margin: '0 0 0.85rem', fontSize: '0.825rem', color: '#555' }}>
+          Seeds N students with human names up to the chosen stage. No browser windows —
+          use this to populate the dashboard and reports at class size. Each button
+          clears the current instance first.
+        </p>
+
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.3rem' }}>
+          <label style={{ fontSize: '0.875rem' }}>
+            <strong>N students:</strong>
+            <input
+              type="number"
+              min={2}
+              max={200}
+              value={stageN}
+              onChange={(e) => { setStageN(e.target.value); setStageResult(null); setStageError(null) }}
+              disabled={stageBusy}
+              style={{
+                width: '4.5rem', marginLeft: '0.5rem',
+                fontFamily: 'monospace', padding: '0.25rem 0.4rem', fontSize: '0.875rem',
+              }}
+            />
+          </label>
+          {(['enrolled', 'present', 'matched', 'completed'] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => void runStage(s)}
+              disabled={stageBusy}
+              style={{ whiteSpace: 'nowrap', textTransform: 'capitalize' }}
+            >
+              {stageBusy ? 'Seeding…' : s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        <p style={{ margin: '0 0 0.75rem', fontSize: '0.775rem', color: '#777' }}>
+          <strong>Enrolled</strong> — roster only, no role/prep (Absent on dashboard).{' '}
+          <strong>Present</strong> — prepped + attendance confirmed, not yet matched.{' '}
+          <strong>Matched</strong> — in groups (status: matched).{' '}
+          <strong>Completed</strong> — finished groups with varied prices, ~10% walk-aways, ~10% no-shows.
+        </p>
+
+        {stageProgress && (
+          <p style={{ margin: '0.5rem 0 0', fontSize: '0.825rem', color: '#555', fontStyle: 'italic' }}>
+            {stageProgress}
+          </p>
+        )}
+        {stageResult && !stageBusy && (
+          <div style={{
+            marginTop: '0.6rem', padding: '0.5rem 0.8rem', borderRadius: 4, fontSize: '0.875rem',
+            background: '#e8f8ee', border: '1px solid #5cb87a',
+          }}>
+            <strong>{stageResult.students} students seeded → {stageResult.stage}</strong>
+            {stageResult.groups != null && <span> · {stageResult.groups} groups</span>}
+            {stageResult.walk_aways != null && <span> · {stageResult.walk_aways} walk-away{stageResult.walk_aways !== 1 ? 's' : ''}</span>}
+            {stageResult.no_shows != null && <span> · {stageResult.no_shows} no-show{stageResult.no_shows !== 1 ? 's' : ''}</span>}
+            {stageResult.price_min != null && stageResult.price_max != null && (
+              <span> · prices ${stageResult.price_min.toLocaleString()}–${stageResult.price_max.toLocaleString()}</span>
+            )}
+            {stageResult.price_range && (
+              <span style={{ color: '#555', fontSize: '0.8rem' }}>
+                {' '}(ZOPA ${stageResult.price_range.chris_reservation.toLocaleString()}–${stageResult.price_range.kelly_reservation.toLocaleString()})
+              </span>
+            )}
+          </div>
+        )}
+        {stageError && (
+          <p style={{ margin: '0.5rem 0 0', color: '#c00', fontSize: '0.825rem' }}>{stageError}</p>
         )}
       </section>
 

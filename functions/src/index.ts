@@ -798,6 +798,264 @@ export const seedLatecomer = onRequest(async (req, res) => {
   res.json({ ok: true })
 })
 
+// ── Simulate-at-scale seed ────────────────────────────────────────────────────
+
+const SIM_FIRST_NAMES = [
+  'Aiden', 'Bella', 'Carlos', 'Diana', 'Ethan', 'Fiona', 'Gabriel', 'Hannah',
+  'Ivan', 'Julia', 'Kevin', 'Laura', 'Marcus', 'Natalie', 'Oscar', 'Priya',
+  'Quincy', 'Rachel', 'Samuel', 'Tara', 'Ulrich', 'Victoria', 'Wesley', 'Xenia',
+  'Yusuf', 'Zoe', 'Aaron', 'Bianca', 'Connor', 'Delia',
+]
+const SIM_LAST_NAMES = [
+  'Adams', 'Baker', 'Carter', 'Davis', 'Evans', 'Foster', 'Green', 'Harris',
+  'Irving', 'Jones', 'King', 'Lopez', 'Miller', 'Nelson', 'Owens', 'Patel',
+  'Quinn', 'Roberts', 'Smith', 'Turner', 'Upton', 'Vargas', 'White', 'Xavier',
+  'Young', 'Zhang', 'Allen', 'Brooks', 'Cruz', 'Dixon',
+]
+
+function simDisplayName(index: number): string {
+  const first = SIM_FIRST_NAMES[index % SIM_FIRST_NAMES.length]
+  const last = SIM_LAST_NAMES[Math.floor(index / SIM_FIRST_NAMES.length) % SIM_LAST_NAMES.length]
+  return `${first} ${last}`
+}
+
+/** Triangle distribution: average of two uniform samples → bell-shaped across the ZOPA. */
+function simPrice(priceChris: number, priceKelly: number): number {
+  const t = (Math.random() + Math.random()) / 2
+  return Math.round(priceChris + t * (priceKelly - priceChris))
+}
+
+/**
+ * Seeds N simulated students at a chosen stage (cumulative).
+ * Stages: enrolled → present → matched → completed.
+ * Only available in the Functions emulator.
+ *
+ * Each call clears the instance first so re-seeding always produces a clean slate.
+ *
+ * Request body: { game_instance_id, stage, n }
+ * Response: { ok, stage, students, groups?, walk_aways?, no_shows?,
+ *             price_range? }
+ */
+export const seedSimulatedGame = onRequest(async (req, res) => {
+  if (process.env.FUNCTIONS_EMULATOR !== 'true') {
+    res.status(404).json({ error: 'Not found' }); return
+  }
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+
+  const body = req.body as {
+    game_instance_id?: unknown
+    stage?: unknown
+    n?: unknown
+  }
+
+  const gameInstanceId = body.game_instance_id
+  const stage = body.stage
+  const rawN = body.n
+
+  if (typeof gameInstanceId !== 'string' || !gameInstanceId) {
+    res.status(400).json({ error: 'game_instance_id is required' }); return
+  }
+  const validStages = ['enrolled', 'present', 'matched', 'completed']
+  if (typeof stage !== 'string' || !validStages.includes(stage)) {
+    res.status(400).json({ error: 'stage must be enrolled | present | matched | completed' }); return
+  }
+  const numStudents = typeof rawN === 'number' ? Math.round(rawN) : parseInt(String(rawN ?? ''), 10)
+  if (isNaN(numStudents) || numStudents < 2 || numStudents > 200) {
+    res.status(400).json({ error: 'n must be 2–200' }); return
+  }
+
+  const db = admin.firestore()
+  const rtdb = admin.database()
+  const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+  const now = Timestamp.now()
+
+  // ── Clear existing data ──────────────────────────────────────────────────────
+  const [existingParticipants, existingGroups] = await Promise.all([
+    instanceRef.collection('participants').get(),
+    instanceRef.collection('groups').get(),
+  ])
+  if (existingParticipants.size > 0 || existingGroups.size > 0) {
+    const clearBatch = db.batch()
+    for (const d of existingParticipants.docs) clearBatch.delete(d.ref)
+    for (const d of existingGroups.docs) clearBatch.delete(d.ref)
+    await clearBatch.commit()
+  }
+  await Promise.all([
+    rtdb.ref(`attending/${gameInstanceId}`).remove(),
+    rtdb.ref(`presence/${gameInstanceId}`).remove(),
+    instanceRef.collection('role_counts').doc('totals').delete(),
+  ])
+
+  // ── Generate roster ──────────────────────────────────────────────────────────
+  type SimStudent = { id: string; role: 'Chris' | 'Kelly'; displayName: string }
+  const students: SimStudent[] = Array.from({ length: numStudents }, (_, i) => ({
+    id: `sim-${gameInstanceId.slice(-8)}-${String(i + 1).padStart(3, '0')}`,
+    role: (i % 2 === 0 ? 'Chris' : 'Kelly') as 'Chris' | 'Kelly',
+    displayName: simDisplayName(i),
+  }))
+
+  await instanceRef.set({ status: 'active' }, { merge: true })
+
+  // ── Enrolled: bare participant docs (no role, no prep) ──────────────────────
+  const enrollBatch = db.batch()
+  for (const s of students) {
+    const pRef = instanceRef.collection('participants').doc(s.id)
+    if (stage === 'enrolled') {
+      enrollBatch.set(pRef, {
+        participant_id: s.id,
+        game_instance_id: gameInstanceId,
+        display_name: s.displayName,
+      })
+    } else {
+      enrollBatch.set(pRef, {
+        participant_id: s.id,
+        game_instance_id: gameInstanceId,
+        role: s.role,
+        display_name: s.displayName,
+        prep_status: 'complete',
+        attendance_confirmed_at: now,
+        confirmed_ready_at: now,
+      })
+    }
+  }
+  await enrollBatch.commit()
+
+  if (stage === 'enrolled') {
+    res.json({ ok: true, stage, students: numStudents })
+    return
+  }
+
+  // ── Present: RTDB attending + presence; role_counts counter ─────────────────
+  const chrisCount = students.filter((s) => s.role === 'Chris').length
+  const kellyCount = students.filter((s) => s.role === 'Kelly').length
+  const attendingData: Record<string, unknown> = {}
+  const presenceData: Record<string, unknown> = {}
+  for (const s of students) {
+    attendingData[s.id] = { display_name: s.displayName, role: s.role, confirmed_at: now.toMillis() }
+    presenceData[s.id] = { online: true, last_seen: now.toMillis() }
+  }
+  await Promise.all([
+    rtdb.ref(`attending/${gameInstanceId}`).set(attendingData),
+    rtdb.ref(`presence/${gameInstanceId}`).set(presenceData),
+    instanceRef.collection('role_counts').doc('totals').set({ chris: chrisCount, kelly: kellyCount }),
+  ])
+
+  if (stage === 'present') {
+    res.json({ ok: true, stage, students: numStudents })
+    return
+  }
+
+  // ── Matched: run matching algorithm ─────────────────────────────────────────
+  // For 'completed', ~10% of students are no-shows (left out of matching).
+  const noShowCount = stage === 'completed' ? Math.max(0, Math.round(numStudents * 0.10)) : 0
+  const eligible = students.slice(0, numStudents - noShowCount)
+  const rawGroups = matchParticipants(
+    eligible.map((s) => ({ participant_id: s.id, role: s.role })),
+  )
+
+  type GroupRecord = { groupId: string }
+  const groupRecords: GroupRecord[] = []
+
+  // Batch: at most 200 eligible students → 200 participant updates, safely under 500.
+  const matchBatch = db.batch()
+  for (const g of rawGroups) {
+    const groupId = randomUUID()
+    const groupRef = instanceRef.collection('groups').doc(groupId)
+    matchBatch.set(groupRef, {
+      group_id: groupId,
+      game_instance_id: gameInstanceId,
+      chris_participants: g.chris_participants,
+      kelly_participants: g.kelly_participants,
+      lead_participant_id: g.lead_participant_id,
+      status: 'matched',
+      matched_at: now,
+      disagree_count: 0,
+      lead_outcome: null,
+      confirmations: {},
+      agreement_reached: null,
+      final_price: null,
+      instructor_override: false,
+    })
+    for (const pid of g.chris_participants) {
+      matchBatch.update(instanceRef.collection('participants').doc(pid), {
+        group_id: groupId,
+        is_lead: pid === g.lead_participant_id,
+      })
+    }
+    for (const pid of g.kelly_participants) {
+      matchBatch.update(instanceRef.collection('participants').doc(pid), {
+        group_id: groupId,
+        is_lead: false,
+      })
+    }
+    groupRecords.push({ groupId })
+  }
+  await matchBatch.commit()
+
+  if (stage === 'matched') {
+    res.json({ ok: true, stage, students: numStudents, groups: groupRecords.length })
+    return
+  }
+
+  // ── Completed: realistic outcomes ────────────────────────────────────────────
+  // Prices come from config; create with standard defaults if config is absent.
+  const PRICE_DEFAULTS = {
+    reservation_price_chris: 25_000,
+    reservation_price_kelly: 475_000,
+  } as const
+  const configRef = instanceRef.collection('config').doc('main')
+  const configSnap = await configRef.get()
+  let priceChris: number
+  let priceKelly: number
+  if (!configSnap.exists) {
+    priceChris = PRICE_DEFAULTS.reservation_price_chris
+    priceKelly = PRICE_DEFAULTS.reservation_price_kelly
+    await configRef.set({ reservation_price_chris: priceChris, reservation_price_kelly: priceKelly })
+  } else {
+    const cd = configSnap.data()!
+    priceChris = typeof cd.reservation_price_chris === 'number'
+      ? (cd.reservation_price_chris as number) : PRICE_DEFAULTS.reservation_price_chris
+    priceKelly = typeof cd.reservation_price_kelly === 'number'
+      ? (cd.reservation_price_kelly as number) : PRICE_DEFAULTS.reservation_price_kelly
+  }
+
+  // ~10% walk-aways (groups that reached no deal), rest are agreements with varied prices.
+  const walkAwayCount = Math.max(0, Math.round(groupRecords.length * 0.10))
+  const pricesGenerated: number[] = []
+
+  const outcomeBatch = db.batch()
+  for (let i = 0; i < groupRecords.length; i++) {
+    const { groupId } = groupRecords[i]
+    const groupRef = instanceRef.collection('groups').doc(groupId)
+    const isWalkAway = i < walkAwayCount
+    const finalPrice = isWalkAway ? null : simPrice(priceChris, priceKelly)
+    if (finalPrice !== null) pricesGenerated.push(finalPrice)
+    outcomeBatch.update(groupRef, {
+      status: 'completed',
+      agreement_reached: !isWalkAway,
+      final_price: finalPrice,
+      completed_at: now,
+      lead_outcome: { no_deal: isWalkAway, price: finalPrice },
+    })
+  }
+  await outcomeBatch.commit()
+
+  const priceMin = pricesGenerated.length ? Math.min(...pricesGenerated) : null
+  const priceMax = pricesGenerated.length ? Math.max(...pricesGenerated) : null
+
+  res.json({
+    ok: true,
+    stage,
+    students: numStudents,
+    groups: groupRecords.length,
+    walk_aways: walkAwayCount,
+    no_shows: noShowCount,
+    price_min: priceMin,
+    price_max: priceMax,
+    price_range: { chris_reservation: priceChris, kelly_reservation: priceKelly },
+  })
+})
+
 // ── Outcome reporting ─────────────────────────────────────────────────────────
 
 /**
