@@ -814,8 +814,12 @@ const SIM_LAST_NAMES = [
 ]
 
 function simDisplayName(index: number): string {
-  const first = SIM_FIRST_NAMES[index % SIM_FIRST_NAMES.length]
-  const last = SIM_LAST_NAMES[Math.floor(index / SIM_FIRST_NAMES.length) % SIM_LAST_NAMES.length]
+  const n = SIM_LAST_NAMES.length
+  const last = SIM_LAST_NAMES[index % n]
+  // Offset the first-name index by the "lap" count so that when last names
+  // start repeating (at multiples of n), the first name is different →
+  // no duplicate full names for N ≤ n² (= 900, well above the 200 seed cap).
+  const first = SIM_FIRST_NAMES[(index + Math.floor(index / n)) % SIM_FIRST_NAMES.length]
   return `${first} ${last}`
 }
 
@@ -827,14 +831,15 @@ function simPrice(priceChris: number, priceKelly: number): number {
 
 /**
  * Seeds N simulated students at a chosen stage (cumulative).
- * Stages: enrolled → present → matched → completed.
+ * Three cumulative stages: enrolled → present → completed.
  * Only available in the Functions emulator.
  *
  * Each call clears the instance first so re-seeding always produces a clean slate.
+ * N is the number of present students; all N are matched and given outcomes in the
+ * completed stage (no synthetic no-shows among present students).
  *
  * Request body: { game_instance_id, stage, n }
- * Response: { ok, stage, students, groups?, walk_aways?, no_shows?,
- *             price_range? }
+ * Response: { ok, stage, students, groups?, walk_aways?, price_range? }
  */
 export const seedSimulatedGame = onRequest(async (req, res) => {
   if (process.env.FUNCTIONS_EMULATOR !== 'true') {
@@ -855,9 +860,9 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
   if (typeof gameInstanceId !== 'string' || !gameInstanceId) {
     res.status(400).json({ error: 'game_instance_id is required' }); return
   }
-  const validStages = ['enrolled', 'present', 'matched', 'completed']
+  const validStages = ['enrolled', 'present', 'completed']
   if (typeof stage !== 'string' || !validStages.includes(stage)) {
-    res.status(400).json({ error: 'stage must be enrolled | present | matched | completed' }); return
+    res.status(400).json({ error: 'stage must be enrolled | present | completed' }); return
   }
   const numStudents = typeof rawN === 'number' ? Math.round(rawN) : parseInt(String(rawN ?? ''), 10)
   if (isNaN(numStudents) || numStudents < 2 || numStudents > 200) {
@@ -904,6 +909,7 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
       enrollBatch.set(pRef, {
         participant_id: s.id,
         game_instance_id: gameInstanceId,
+        name: s.displayName,
         display_name: s.displayName,
       })
     } else {
@@ -911,6 +917,7 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
         participant_id: s.id,
         game_instance_id: gameInstanceId,
         role: s.role,
+        name: s.displayName,
         display_name: s.displayName,
         prep_status: 'complete',
         attendance_confirmed_at: now,
@@ -945,18 +952,16 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
     return
   }
 
-  // ── Matched: run matching algorithm ─────────────────────────────────────────
-  // For 'completed', ~10% of students are no-shows (left out of matching).
-  const noShowCount = stage === 'completed' ? Math.max(0, Math.round(numStudents * 0.10)) : 0
-  const eligible = students.slice(0, numStudents - noShowCount)
+  // ── Match: run matching algorithm on ALL N present students ──────────────────
+  // No synthetic no-shows: every present student is eligible.
   const rawGroups = matchParticipants(
-    eligible.map((s) => ({ participant_id: s.id, role: s.role })),
+    students.map((s) => ({ participant_id: s.id, role: s.role })),
   )
 
   type GroupRecord = { groupId: string }
   const groupRecords: GroupRecord[] = []
 
-  // Batch: at most 200 eligible students → 200 participant updates, safely under 500.
+  // Batch: at most 200 students → 200 participant updates, safely under 500.
   const matchBatch = db.batch()
   for (const g of rawGroups) {
     const groupId = randomUUID()
@@ -992,11 +997,6 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
   }
   await matchBatch.commit()
 
-  if (stage === 'matched') {
-    res.json({ ok: true, stage, students: numStudents, groups: groupRecords.length })
-    return
-  }
-
   // ── Completed: realistic outcomes ────────────────────────────────────────────
   // Prices come from config; create with standard defaults if config is absent.
   const PRICE_DEFAULTS = {
@@ -1019,8 +1019,12 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
       ? (cd.reservation_price_kelly as number) : PRICE_DEFAULTS.reservation_price_kelly
   }
 
-  // ~10% walk-aways (groups that reached no deal), rest are agreements with varied prices.
+  // ~10% walk-aways (no deal), 1 deadlocked group, rest are agreements with varied prices.
   const walkAwayCount = Math.max(0, Math.round(groupRecords.length * 0.10))
+  // Reserve one group (immediately after walk-aways) as deadlocked so the
+  // roster dashboard always has at least one instructor-action-item to display.
+  const deadlockedIndex = walkAwayCount
+  const deadlockedCount = groupRecords.length > deadlockedIndex ? 1 : 0
   const pricesGenerated: number[] = []
 
   const outcomeBatch = db.batch()
@@ -1028,15 +1032,21 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
     const { groupId } = groupRecords[i]
     const groupRef = instanceRef.collection('groups').doc(groupId)
     const isWalkAway = i < walkAwayCount
-    const finalPrice = isWalkAway ? null : simPrice(priceChris, priceKelly)
-    if (finalPrice !== null) pricesGenerated.push(finalPrice)
-    outcomeBatch.update(groupRef, {
-      status: 'completed',
-      agreement_reached: !isWalkAway,
-      final_price: finalPrice,
-      completed_at: now,
-      lead_outcome: { no_deal: isWalkAway, price: finalPrice },
-    })
+    const isDeadlocked = !isWalkAway && i === deadlockedIndex
+
+    if (isDeadlocked) {
+      outcomeBatch.update(groupRef, { status: 'deadlocked' })
+    } else {
+      const finalPrice = isWalkAway ? null : simPrice(priceChris, priceKelly)
+      if (finalPrice !== null) pricesGenerated.push(finalPrice)
+      outcomeBatch.update(groupRef, {
+        status: 'completed',
+        agreement_reached: !isWalkAway,
+        final_price: finalPrice,
+        completed_at: now,
+        lead_outcome: { no_deal: isWalkAway, price: finalPrice },
+      })
+    }
   }
   await outcomeBatch.commit()
 
@@ -1049,7 +1059,7 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
     students: numStudents,
     groups: groupRecords.length,
     walk_aways: walkAwayCount,
-    no_shows: noShowCount,
+    deadlocked: deadlockedCount,
     price_min: priceMin,
     price_max: priceMax,
     price_range: { chris_reservation: priceChris, kelly_reservation: priceKelly },
@@ -1343,6 +1353,51 @@ export const getGroupStatuses = onRequest(async (req, res) => {
     res.json({ ok: true, groups })
   } catch (err) {
     console.error('getGroupStatuses error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+/**
+ * Returns all enrolled participants and group statuses for the instructor roster.
+ *
+ * Request body (emulator): { _dev: { game_instance_id } }
+ * Response: { ok, participants: RosterEntry[], groups: RosterGroup[] }
+ */
+export const getRoster = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  if (!gameInstanceId) return
+
+  try {
+    const db = admin.firestore()
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+    const [participantsSnap, groupsSnap] = await Promise.all([
+      instanceRef.collection('participants').get(),
+      instanceRef.collection('groups').get(),
+    ])
+    const participants = participantsSnap.docs.map((d) => {
+      const p = d.data()
+      return {
+        participant_id: p.participant_id as string,
+        name: ((p.name ?? p.display_name ?? '') as string),
+        role: (p.role ?? null) as string | null,
+        has_attendance: p.attendance_confirmed_at != null,
+        has_prep_completed: p.prep_completed_at != null,
+        group_id: (p.group_id ?? null) as string | null,
+      }
+    })
+    const groups = groupsSnap.docs.map((d) => {
+      const g = d.data()
+      return {
+        group_id: g.group_id as string,
+        status: g.status as string,
+      }
+    })
+    res.json({ ok: true, participants, groups })
+  } catch (err) {
+    console.error('getRoster error:', err)
     res.status(500).json({ error: 'Internal error' })
   }
 })

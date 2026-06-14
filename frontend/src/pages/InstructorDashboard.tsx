@@ -15,6 +15,7 @@ import {
   type UnmatchedParticipant,
 } from '../api'
 import { rtdb } from '../firebase'
+import RosterTable from './RosterTable'
 
 /**
  * Live instructor dashboard.
@@ -315,6 +316,18 @@ export default function InstructorDashboard() {
       }}
     >
       <h1 style={{ marginTop: 0 }}>Instructor Dashboard — Grays.com</h1>
+
+      {/* ── Class Roster ───────────────────────────────────────────── */}
+      <section style={{ marginTop: '2rem' }}>
+        <h2 style={{ borderBottom: '1px solid #ddd', paddingBottom: '0.5rem' }}>
+          Class Roster
+        </h2>
+        {devGameInstanceId ? (
+          <RosterTable gameInstanceId={devGameInstanceId} />
+        ) : (
+          <p style={{ color: '#888' }}>No game instance ID — add ?_dev_game_instance_id= to the URL.</p>
+        )}
+      </section>
 
       {/* ── Attendance Code ────────────────────────────────────────── */}
       <section style={{ marginTop: '2rem', maxWidth: '640px' }}>

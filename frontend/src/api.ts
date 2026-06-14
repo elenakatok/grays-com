@@ -127,6 +127,27 @@ export const submitInstructorOutcome = (
 export const getGroupStatuses = (args: InstructorDevArgs) =>
   callFunction<{ ok: boolean; groups: GroupStatusResult[] }>('getGroupStatuses', args)
 
+export type RosterParticipant = {
+  participant_id: string
+  name: string
+  role: string | null
+  has_attendance: boolean
+  has_prep_completed: boolean
+  group_id: string | null
+}
+
+export type RosterGroup = {
+  group_id: string
+  status: string
+}
+
+/** Returns all enrolled participants + group statuses for the instructor roster. */
+export const getRoster = (args: InstructorDevArgs) =>
+  callFunction<{ ok: boolean; participants: RosterParticipant[]; groups: RosterGroup[] }>(
+    'getRoster',
+    args,
+  )
+
 // ── Late-participant helpers ───────────────────────────────────────────────────
 
 export type LateGroupSuggestion = {

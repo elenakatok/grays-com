@@ -228,7 +228,7 @@ export default function DevLauncher() {
   const [stageProgress, setStageProgress] = useState<string | null>(null)
   const [stageResult, setStageResult] = useState<{
     stage: string; students: number; groups?: number
-    walk_aways?: number; no_shows?: number
+    walk_aways?: number; deadlocked?: number
     price_min?: number | null; price_max?: number | null
     price_range?: { chris_reservation: number; kelly_reservation: number }
   } | null>(null)
@@ -392,7 +392,7 @@ export default function DevLauncher() {
       }
       const data = await res.json() as {
         stage: string; students: number; groups?: number
-        walk_aways?: number; no_shows?: number
+        walk_aways?: number; deadlocked?: number
         price_min?: number | null; price_max?: number | null
         price_range?: { chris_reservation: number; kelly_reservation: number }
       }
@@ -583,7 +583,7 @@ export default function DevLauncher() {
               }}
             />
           </label>
-          {(['enrolled', 'present', 'matched', 'completed'] as const).map((s) => (
+          {(['enrolled', 'present', 'completed'] as const).map((s) => (
             <button
               key={s}
               onClick={() => void runStage(s)}
@@ -597,9 +597,8 @@ export default function DevLauncher() {
 
         <p style={{ margin: '0 0 0.75rem', fontSize: '0.775rem', color: '#777' }}>
           <strong>Enrolled</strong> — roster only, no role/prep (Absent on dashboard).{' '}
-          <strong>Present</strong> — prepped + attendance confirmed, not yet matched.{' '}
-          <strong>Matched</strong> — in groups (status: matched).{' '}
-          <strong>Completed</strong> — finished groups with varied prices, ~10% walk-aways, ~10% no-shows.
+          <strong>Present</strong> — all N prepped + attendance confirmed; use Match Now on the dashboard to form groups.{' '}
+          <strong>Completed</strong> — all N matched with outcomes (walk-aways + 1 deadlocked group).
         </p>
 
         {stageProgress && (
@@ -615,7 +614,7 @@ export default function DevLauncher() {
             <strong>{stageResult.students} students seeded → {stageResult.stage}</strong>
             {stageResult.groups != null && <span> · {stageResult.groups} groups</span>}
             {stageResult.walk_aways != null && <span> · {stageResult.walk_aways} walk-away{stageResult.walk_aways !== 1 ? 's' : ''}</span>}
-            {stageResult.no_shows != null && <span> · {stageResult.no_shows} no-show{stageResult.no_shows !== 1 ? 's' : ''}</span>}
+            {stageResult.deadlocked != null && stageResult.deadlocked > 0 && <span> · {stageResult.deadlocked} deadlocked</span>}
             {stageResult.price_min != null && stageResult.price_max != null && (
               <span> · prices ${stageResult.price_min.toLocaleString()}–${stageResult.price_max.toLocaleString()}</span>
             )}
