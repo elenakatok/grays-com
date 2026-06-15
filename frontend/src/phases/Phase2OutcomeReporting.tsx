@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { db } from '../firebase'
 import { type CallArgs, submitLeadOutcome, submitConfirmation } from '../api'
+import { parsePrice } from '../utils/parsePrice'
 
 type LeadOutcome = { price: number | null; no_deal: boolean }
 type Confirmation = 'pending' | 'confirmed' | 'disagreed'
@@ -49,6 +50,7 @@ export default function Phase2OutcomeReporting({
 }: Props) {
   const [groupData, setGroupData] = useState<GroupData | null>(null)
   const [priceInput, setPriceInput] = useState('')
+  const [pendingConfirm, setPendingConfirm] = useState<number | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const calledComplete = useRef(false)
@@ -82,13 +84,28 @@ export default function Phase2OutcomeReporting({
   }
 
   const handleSubmitPrice = () => {
-    const raw = priceInput.replace(/[,$\s]/g, '')
-    const price = parseFloat(raw)
-    if (isNaN(price) || price <= 0) {
+    const result = parsePrice(priceInput)
+    if (result.kind === 'invalid') {
       setActionError('Please enter a valid price (a positive number).')
       return
     }
-    withSubmit(() => submitLeadOutcome(callArgs, Math.round(price)).then(() => setPriceInput('')))
+    if (result.kind === 'confirm') {
+      setActionError(null)
+      setPendingConfirm(result.proposed)
+      return
+    }
+    withSubmit(() => submitLeadOutcome(callArgs, result.value).then(() => setPriceInput('')))
+  }
+
+  const handleConfirmProposed = () => {
+    if (pendingConfirm == null) return
+    const value = pendingConfirm
+    setPendingConfirm(null)
+    withSubmit(() => submitLeadOutcome(callArgs, value).then(() => setPriceInput('')))
+  }
+
+  const handleRejectProposed = () => {
+    setPendingConfirm(null)
   }
 
   const handleNoDeal = () => withSubmit(() => submitLeadOutcome(callArgs, null))
@@ -183,10 +200,40 @@ export default function Phase2OutcomeReporting({
               No deal
             </button>
           </div>
-          {actionError && <p style={{ color: '#c00', marginBottom: '0.5rem' }}>{actionError}</p>}
-          <button onClick={handleSubmitPrice} disabled={submitting || priceInput.trim() === ''}>
-            {submitting ? 'Submitting…' : 'Submit'}
-          </button>
+          {pendingConfirm != null ? (
+            <div
+              style={{
+                marginBottom: '0.75rem',
+                padding: '0.75rem',
+                background: '#f0f7ff',
+                border: '1px solid #b3d4f5',
+                borderRadius: 4,
+              }}
+            >
+              <p style={{ margin: '0 0 0.6rem', fontSize: '0.95rem' }}>
+                You entered <strong>{formatPrice(pendingConfirm)}</strong>. Is that correct?
+              </p>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button onClick={handleConfirmProposed} disabled={submitting}>
+                  {submitting ? 'Submitting…' : 'Yes'}
+                </button>
+                <button
+                  onClick={handleRejectProposed}
+                  disabled={submitting}
+                  style={{ background: 'none', border: '1px solid #ccc' }}
+                >
+                  No
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {actionError && <p style={{ color: '#c00', marginBottom: '0.5rem' }}>{actionError}</p>}
+              <button onClick={handleSubmitPrice} disabled={submitting || priceInput.trim() === ''}>
+                {submitting ? 'Submitting…' : 'Submit'}
+              </button>
+            </>
+          )}
         </main>
       )
     }

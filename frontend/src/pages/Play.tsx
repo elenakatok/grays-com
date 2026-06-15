@@ -6,6 +6,7 @@ import { auth, db } from '../firebase'
 import { type CallArgs, assignRole, getInfoUrls } from '../api'
 import Phase2OutcomeReporting from '../phases/Phase2OutcomeReporting'
 import Phase2Results from '../phases/Phase2Results'
+import Phase2Debrief from '../phases/Phase2Debrief'
 import Phase1Info from '../phases/Phase1Info'
 import Phase1KnowledgeCheck from '../phases/Phase1KnowledgeCheck'
 import Phase1PrepQuestions from '../phases/Phase1PrepQuestions'
@@ -40,6 +41,7 @@ type GamePhase =
   | { name: 'off-platform-holding'; groupId: string; isLead: boolean }
   | { name: 'outcome-reporting'; groupId: string; participantId: string; gameInstanceId: string; isLead: boolean }
   | { name: 'results'; groupId: string; gameInstanceId: string }
+  | { name: 'debrief'; groupId: string; participantId: string; gameInstanceId: string }
 
 type SessionInfo = {
   participantId: string
@@ -123,7 +125,11 @@ export default function Play() {
                 const groupStatus = gdata?.status as string | undefined
                 if (!cancelled) {
                   if (groupStatus === 'completed') {
-                    setPhase({ name: 'results', groupId: pdata.group_id as string, gameInstanceId: game_instance_id })
+                    if (pdata.debrief_initial_offer != null) {
+                      setPhase({ name: 'debrief', groupId: pdata.group_id as string, participantId: participant_id, gameInstanceId: game_instance_id })
+                    } else {
+                      setPhase({ name: 'results', groupId: pdata.group_id as string, gameInstanceId: game_instance_id })
+                    }
                   } else if (groupStatus === 'reporting' || groupStatus === 'deadlocked') {
                     setPhase({
                       name: 'outcome-reporting',
@@ -348,7 +354,31 @@ export default function Play() {
   }
 
   if (phase.name === 'results') {
-    return <Phase2Results groupId={phase.groupId} gameInstanceId={phase.gameInstanceId} />
+    return (
+      <Phase2Results
+        groupId={phase.groupId}
+        gameInstanceId={phase.gameInstanceId}
+        onComplete={() =>
+          setPhase({
+            name: 'debrief',
+            groupId: phase.groupId,
+            participantId: sessionRef.current!.participantId,
+            gameInstanceId: phase.gameInstanceId,
+          })
+        }
+      />
+    )
+  }
+
+  if (phase.name === 'debrief') {
+    return (
+      <Phase2Debrief
+        groupId={phase.groupId}
+        participantId={phase.participantId}
+        gameInstanceId={phase.gameInstanceId}
+        callArgs={callArgsRef.current!}
+      />
+    )
   }
 
   // phase.name === 'info'

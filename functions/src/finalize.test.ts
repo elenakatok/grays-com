@@ -16,7 +16,7 @@ const CONFIG: GameConfig = {
 
 function makeChris(
   id: string,
-  status: 'completed' | 'no_show',
+  status: 'completed' | 'no_show' | 'late',
   finalPrice: number | null,
 ): ParticipantRecord {
   return {
@@ -32,7 +32,7 @@ function makeChris(
 
 function makeKelly(
   id: string,
-  status: 'completed' | 'no_show',
+  status: 'completed' | 'no_show' | 'late',
   finalPrice: number | null,
 ): ParticipantRecord {
   return {
@@ -54,7 +54,8 @@ function byId(results: ReturnType<typeof computeZScores>, id: string) {
   return r!
 }
 
-function approx(actual: number, expected: number, tol = 1e-9) {
+function approx(actual: number | null, expected: number, tol = 1e-9) {
+  assert.ok(actual != null, `expected ≈${expected}, got null`)
   assert.ok(
     Math.abs(actual - expected) <= tol,
     `expected ≈${expected}, got ${actual}`,
@@ -215,7 +216,7 @@ test('end-to-end: 4C + 4K, one walk-away per role', () => {
   // ── print table ────────────────────────────────────────────────────────────
   const fmt = (n: number | null, prefix = '$') =>
     n === null ? 'walk-away'.padStart(12) : `${prefix}${n.toLocaleString()}`.padStart(12)
-  const fmtZ = (z: number) => z.toFixed(4).padStart(10)
+  const fmtZ = (z: number | null) => (z == null ? 'null' : z.toFixed(4)).padStart(10)
 
   console.log('\n── end-to-end: 4C + 4K, one walk-away per role ──────────────────')
   console.log(`  Config: reservation_price_chris = $25,000  /  reservation_price_kelly = $475,000`)
@@ -245,9 +246,9 @@ test('end-to-end: 4C + 4K, one walk-away per role', () => {
   assert.equal(byId(results, 'K3').raw_score,  100_000)
   assert.equal(byId(results, 'K4').raw_score,        0)
 
-  // z-scores sum to 0 within each role
-  const chrisZ = ['C1','C2','C3','C4'].map((id) => byId(results, id).normalized_score)
-  const kellyZ = ['K1','K2','K3','K4'].map((id) => byId(results, id).normalized_score)
+  // z-scores sum to 0 within each role (all completed → guaranteed non-null)
+  const chrisZ = ['C1','C2','C3','C4'].map((id) => byId(results, id).normalized_score as number)
+  const kellyZ = ['K1','K2','K3','K4'].map((id) => byId(results, id).normalized_score as number)
   approx(chrisZ.reduce((a, b) => a + b, 0), 0)
   approx(kellyZ.reduce((a, b) => a + b, 0), 0)
 
@@ -267,4 +268,20 @@ test('end-to-end: 4C + 4K, one walk-away per role', () => {
   approx(byId(results, 'K2').normalized_score,  2 / Math.sqrt(10))
   approx(byId(results, 'K3').normalized_score, -2 / Math.sqrt(10))
   approx(byId(results, 'K4').normalized_score, -4 / Math.sqrt(10))
+})
+
+test('late: raw_score and normalized_score are null, not in distribution', () => {
+  // Late participant must not shift completed participant's z-score.
+  const withLate = computeZScores(
+    [makeChris('c1', 'completed', 300_000), makeChris('c2', 'late', null)],
+    CONFIG,
+  )
+  const withoutLate = computeZScores(
+    [makeChris('c1', 'completed', 300_000)],
+    CONFIG,
+  )
+  assert.equal(byId(withLate, 'c2').raw_score, null, 'late raw_score must be null')
+  assert.equal(byId(withLate, 'c2').normalized_score, null, 'late normalized_score must be null')
+  // c1 is unaffected by the late participant
+  assert.equal(byId(withLate, 'c1').normalized_score, byId(withoutLate, 'c1').normalized_score)
 })

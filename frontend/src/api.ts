@@ -111,6 +111,10 @@ export const submitLeadOutcome = (args: CallArgs, price: number | null) =>
 export const submitConfirmation = (args: CallArgs, confirmed: boolean) =>
   callFunction<{ ok: boolean; outcome: string }>('submitConfirmation', { ...args, confirmed })
 
+/** Records a participant's debrief opening offer and recomputes the group average. */
+export const submitDebriefOffer = (args: CallArgs, initialOffer: number) =>
+  callFunction<{ ok: boolean }>('submitDebriefOffer', { ...args, initial_offer: initialOffer })
+
 /** Instructor manually settles a deadlocked group. */
 export const submitInstructorOutcome = (
   args: InstructorDevArgs,
@@ -134,6 +138,7 @@ export type RosterParticipant = {
   has_attendance: boolean
   has_prep_completed: boolean
   group_id: string | null
+  is_late: boolean
 }
 
 export type RosterGroup = {
@@ -143,10 +148,36 @@ export type RosterGroup = {
 
 /** Returns all enrolled participants + group statuses for the instructor roster. */
 export const getRoster = (args: InstructorDevArgs) =>
-  callFunction<{ ok: boolean; participants: RosterParticipant[]; groups: RosterGroup[] }>(
+  callFunction<{ ok: boolean; participants: RosterParticipant[]; groups: RosterGroup[]; session_live: boolean }>(
     'getRoster',
     args,
   )
+
+// ── Reports ───────────────────────────────────────────────────────────────────
+
+export type ReportGroup = {
+  group_id: string
+  status: string
+  agreement_reached: boolean | null
+  final_price: number | null
+  group_initial_price: number | null
+}
+
+export type ReportConfig = {
+  reservation_price_chris: number
+  reservation_price_kelly: number
+}
+
+export type ReportParticipant = {
+  participant_id: string
+  role: 'Chris' | 'Kelly'
+  prep_planned_first_offer:   number | null
+  prep_estimated_other_price: number | null
+}
+
+/** Returns group outcomes, game config, and per-participant prep answers for the Reports page. */
+export const getReportData = (args: InstructorDevArgs) =>
+  callFunction<{ ok: boolean; groups: ReportGroup[]; config: ReportConfig; participants: ReportParticipant[] }>('getReportData', args)
 
 // ── Late-participant helpers ───────────────────────────────────────────────────
 
@@ -167,6 +198,10 @@ export type UnmatchedParticipant = {
 /** Returns present, attendance-verified participants who are not yet in any group. */
 export const getUnmatchedParticipants = (args: InstructorDevArgs) =>
   callFunction<{ ok: boolean; unmatched: UnmatchedParticipant[] }>('getUnmatchedParticipants', args)
+
+/** Marks a present-but-unplaceable participant as "Late" (raw_score/normalized_score = null). */
+export const markParticipantLate = (args: InstructorDevArgs, participantId: string) =>
+  callFunction<{ ok: boolean }>('markParticipantLate', { ...args, participant_id: participantId })
 
 /** Adds a late participant to a specific group (server re-checks eligibility). */
 export const addLateParticipant = (

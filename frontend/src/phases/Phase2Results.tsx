@@ -6,6 +6,7 @@ import { db, rtdb } from '../firebase'
 type Props = {
   groupId: string
   gameInstanceId: string
+  onComplete: () => void
 }
 
 type Member = { pid: string; displayName: string; role: 'Chris' | 'Kelly' }
@@ -22,7 +23,7 @@ function formatPrice(p: number): string {
   }).format(p)
 }
 
-export default function Phase2Results({ groupId, gameInstanceId }: Props) {
+export default function Phase2Results({ groupId, gameInstanceId, onComplete }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' })
 
   useEffect(() => {
@@ -111,6 +112,9 @@ export default function Phase2Results({ groupId, gameInstanceId }: Props) {
           ? `Agreement at ${formatPrice(finalPrice)}`
           : 'No deal reached.'}
       </p>
+      <button onClick={onComplete} style={{ marginTop: '1.5rem' }}>
+        Continue
+      </button>
     </main>
   )
 }

@@ -25,7 +25,7 @@ export type GameConfig = {
 export type ParticipantRecord = {
   participant_id: string
   role: 'Chris' | 'Kelly'
-  status: 'completed' | 'no_show'
+  status: 'completed' | 'no_show' | 'late'
   agreement_reached: boolean
   final_price: number | null
   knowledge_check_score: number | null
@@ -36,7 +36,7 @@ export type FinalizedResult = {
   participant_id: string
   role: 'Chris' | 'Kelly'
   raw_score: number | null
-  normalized_score: number
+  normalized_score: number | null  // null for 'late'; -2 for no_show
   knowledge_check_score: number | null
 }
 
@@ -87,7 +87,16 @@ export function computeZScores(
         participant_id: p.participant_id,
         role: p.role,
         raw_score: null,
-        normalized_score: -2,
+        normalized_score: -2,   // floor marker: absent, editable in gradebook
+        knowledge_check_score: p.knowledge_check_score,
+      }
+    }
+    if (p.status === 'late') {
+      return {
+        participant_id: p.participant_id,
+        role: p.role,
+        raw_score: null,
+        normalized_score: null, // never negotiated → no surplus → not in distribution
         knowledge_check_score: p.knowledge_check_score,
       }
     }

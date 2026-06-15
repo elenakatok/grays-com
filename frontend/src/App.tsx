@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import Play from './pages/Play.tsx'
 import Configure from './pages/Configure.tsx'
 import InstructorDashboard from './pages/InstructorDashboard.tsx'
+import Reports from './pages/Reports.tsx'
 import StandaloneLogin from './pages/StandaloneLogin.tsx'
 import DevLauncher from './pages/DevLauncher.tsx'
 
@@ -17,6 +18,9 @@ export default function App() {
 
         {/* Instructor live dashboard */}
         <Route path="/dashboard" element={<InstructorDashboard />} />
+
+        {/* Reports (stub — full page is a separate task) */}
+        <Route path="/reports" element={<Reports />} />
 
         {/*
           Dev-only test launcher. The route is only added in dev mode;

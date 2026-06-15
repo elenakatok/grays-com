@@ -829,14 +829,28 @@ function simPrice(priceChris: number, priceKelly: number): number {
   return Math.round(priceChris + t * (priceKelly - priceChris))
 }
 
+function randInt(lo: number, hi: number): number {
+  return Math.round(lo + Math.random() * (hi - lo))
+}
+
+function simPrepFields(role: 'Chris' | 'Kelly'): {
+  prep_planned_first_offer: number
+  prep_estimated_other_price: number
+} {
+  return role === 'Chris'
+    ? { prep_planned_first_offer: randInt(50_000, 280_000), prep_estimated_other_price: randInt(300_000, 500_000) }
+    : { prep_planned_first_offer: randInt(250_000, 550_000), prep_estimated_other_price: randInt(25_000, 200_000) }
+}
+
 /**
  * Seeds N simulated students at a chosen stage (cumulative).
  * Three cumulative stages: enrolled → present → completed.
  * Only available in the Functions emulator.
  *
  * Each call clears the instance first so re-seeding always produces a clean slate.
- * N is the number of present students; all N are matched and given outcomes in the
- * completed stage (no synthetic no-shows among present students).
+ * N is the total number of enrolled students. For present/completed stages, ~70% of
+ * them are marked as having attended; the remaining ~30% get bare enrolled records
+ * (absent — no attendance, no presence, no match state).
  *
  * Request body: { game_instance_id, stage, n }
  * Response: { ok, stage, students, groups?, walk_aways?, price_range? }
@@ -901,16 +915,23 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
 
   await instanceRef.set({ status: 'active' }, { merge: true })
 
-  // ── Enrolled: bare participant docs (no role, no prep) ──────────────────────
+  // ~70% of enrolled students attended; the rest are absent (enrolled record only).
+  const presentCount = Math.max(2, Math.round(numStudents * 0.7))
+  const presentSet = new Set(students.slice(0, presentCount).map((s) => s.id))
+
+  // ── Enrolled: write ALL N participant docs ───────────────────────────────────
   const enrollBatch = db.batch()
   for (const s of students) {
     const pRef = instanceRef.collection('participants').doc(s.id)
-    if (stage === 'enrolled') {
+    if (stage === 'enrolled' || !presentSet.has(s.id)) {
       enrollBatch.set(pRef, {
         participant_id: s.id,
         game_instance_id: gameInstanceId,
         name: s.displayName,
         display_name: s.displayName,
+        // In present/completed stages every student has an assigned role, even absent ones.
+        ...(stage !== 'enrolled' ? { role: s.role } : {}),
+        ...simPrepFields(s.role),
       })
     } else {
       enrollBatch.set(pRef, {
@@ -922,6 +943,7 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
         prep_status: 'complete',
         attendance_confirmed_at: now,
         confirmed_ready_at: now,
+        ...simPrepFields(s.role),
       })
     }
   }
@@ -932,12 +954,13 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
     return
   }
 
-  // ── Present: RTDB attending + presence; role_counts counter ─────────────────
-  const chrisCount = students.filter((s) => s.role === 'Chris').length
-  const kellyCount = students.filter((s) => s.role === 'Kelly').length
+  // ── Present: RTDB attending + presence for present students only ────────────
+  const presentStudents = students.filter((s) => presentSet.has(s.id))
+  const chrisCount = presentStudents.filter((s) => s.role === 'Chris').length
+  const kellyCount = presentStudents.filter((s) => s.role === 'Kelly').length
   const attendingData: Record<string, unknown> = {}
   const presenceData: Record<string, unknown> = {}
-  for (const s of students) {
+  for (const s of presentStudents) {
     attendingData[s.id] = { display_name: s.displayName, role: s.role, confirmed_at: now.toMillis() }
     presenceData[s.id] = { online: true, last_seen: now.toMillis() }
   }
@@ -945,6 +968,8 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
     rtdb.ref(`attending/${gameInstanceId}`).set(attendingData),
     rtdb.ref(`presence/${gameInstanceId}`).set(presenceData),
     instanceRef.collection('role_counts').doc('totals').set({ chris: chrisCount, kelly: kellyCount }),
+    // Generate an attendance code so the roster knows the session is live.
+    doGenerateCode(gameInstanceId),
   ])
 
   if (stage === 'present') {
@@ -952,10 +977,9 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
     return
   }
 
-  // ── Match: run matching algorithm on ALL N present students ──────────────────
-  // No synthetic no-shows: every present student is eligible.
+  // ── Match: run matching algorithm on present students only ──────────────────
   const rawGroups = matchParticipants(
-    students.map((s) => ({ participant_id: s.id, role: s.role })),
+    presentStudents.map((s) => ({ participant_id: s.id, role: s.role })),
   )
 
   type GroupRecord = { groupId: string }
@@ -1045,6 +1069,7 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
         final_price: finalPrice,
         completed_at: now,
         lead_outcome: { no_deal: isWalkAway, price: finalPrice },
+        group_initial_price: simPrice(priceChris, priceKelly),
       })
     }
   }
@@ -1317,6 +1342,67 @@ export const submitInstructorOutcome = onRequest(async (req, res) => {
 })
 
 /**
+ * Records a participant's actual opening offer from their negotiation.
+ * Writes debrief_initial_offer to their participant doc, then recomputes
+ * group_initial_price as the average of all submitted values so far.
+ *
+ * Request body (emulator): { _test: { participant_id, game_instance_id }, initial_offer: number }
+ */
+export const submitDebriefOffer = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const ids = extractStudentIds(body, isEmulator, res)
+  if (!ids) return
+  const { participantId, gameInstanceId } = ids
+
+  const rawOffer = body.initial_offer
+  if (typeof rawOffer !== 'number' || !isFinite(rawOffer) || rawOffer <= 0) {
+    res.status(400).json({ error: 'initial_offer must be a positive number' })
+    return
+  }
+  const offer = Math.round(rawOffer)
+
+  try {
+    const db = admin.firestore()
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+    const participantRef = instanceRef.collection('participants').doc(participantId)
+
+    const pSnap = await participantRef.get()
+    if (!pSnap.exists) { res.status(404).json({ error: 'Participant not found.' }); return }
+    const pdata = pSnap.data()!
+    if (!pdata.group_id) { res.status(400).json({ error: 'Not in a group.' }); return }
+    const groupId = pdata.group_id as string
+
+    await participantRef.update({ debrief_initial_offer: offer })
+
+    const groupRef = instanceRef.collection('groups').doc(groupId)
+    const gSnap = await groupRef.get()
+    if (!gSnap.exists) { res.status(404).json({ error: 'Group not found.' }); return }
+    const gdata = gSnap.data()!
+    const allPids: string[] = [
+      ...(gdata.chris_participants as string[]),
+      ...(gdata.kelly_participants as string[]),
+    ]
+
+    const memberSnaps = await Promise.all(
+      allPids.map((pid) => instanceRef.collection('participants').doc(pid).get()),
+    )
+    const offers: number[] = memberSnaps
+      .map((snap) => snap.data()?.debrief_initial_offer)
+      .filter((v): v is number => typeof v === 'number' && v > 0)
+
+    const group_initial_price = Math.round(offers.reduce((a, b) => a + b, 0) / offers.length)
+    await groupRef.update({ group_initial_price })
+
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('submitDebriefOffer error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+/**
  * Returns all groups for a game instance with their current status and outcome.
  * Used by the instructor dashboard to monitor progress and spot deadlocked groups.
  *
@@ -1358,6 +1444,65 @@ export const getGroupStatuses = onRequest(async (req, res) => {
 })
 
 /**
+ * Returns group outcomes and game config needed for the Reports page.
+ * Request body: { _dev: { game_instance_id } }
+ * Response: { ok, groups: GroupOutcome[], config: { reservation_price_chris, reservation_price_kelly } }
+ */
+export const getReportData = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  if (!gameInstanceId) return
+
+  try {
+    const db = admin.firestore()
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+    const [groupsSnap, configSnap, participantsSnap] = await Promise.all([
+      instanceRef.collection('groups').get(),
+      instanceRef.collection('config').doc('main').get(),
+      instanceRef.collection('participants').get(),
+    ])
+
+    const groups = groupsSnap.docs.map((d) => {
+      const g = d.data()
+      return {
+        group_id: g.group_id as string,
+        status: g.status as string,
+        agreement_reached: (g.agreement_reached ?? null) as boolean | null,
+        final_price: (g.final_price ?? null) as number | null,
+        group_initial_price: (g.group_initial_price ?? null) as number | null,
+      }
+    })
+
+    const participants = participantsSnap.docs
+      .map((d) => {
+        const p = d.data()
+        return {
+          participant_id: d.id as string,
+          role: (p.role ?? null) as 'Chris' | 'Kelly' | null,
+          prep_planned_first_offer:   (p.prep_planned_first_offer   ?? null) as number | null,
+          prep_estimated_other_price: (p.prep_estimated_other_price ?? null) as number | null,
+        }
+      })
+      .filter((p) => p.role === 'Chris' || p.role === 'Kelly')
+
+    const cd = configSnap.data() ?? {}
+    const config = {
+      reservation_price_chris: typeof cd.reservation_price_chris === 'number'
+        ? (cd.reservation_price_chris as number) : 25_000,
+      reservation_price_kelly: typeof cd.reservation_price_kelly === 'number'
+        ? (cd.reservation_price_kelly as number) : 475_000,
+    }
+
+    res.json({ ok: true, groups, config, participants })
+  } catch (err) {
+    console.error('getReportData error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+/**
  * Returns all enrolled participants and group statuses for the instructor roster.
  *
  * Request body (emulator): { _dev: { game_instance_id } }
@@ -1373,9 +1518,10 @@ export const getRoster = onRequest(async (req, res) => {
   try {
     const db = admin.firestore()
     const instanceRef = db.collection('game_instances').doc(gameInstanceId)
-    const [participantsSnap, groupsSnap] = await Promise.all([
+    const [participantsSnap, groupsSnap, attendanceCodeSnap] = await Promise.all([
       instanceRef.collection('participants').get(),
       instanceRef.collection('groups').get(),
+      instanceRef.collection('attendance_code').doc('current').get(),
     ])
     const participants = participantsSnap.docs.map((d) => {
       const p = d.data()
@@ -1386,6 +1532,7 @@ export const getRoster = onRequest(async (req, res) => {
         has_attendance: p.attendance_confirmed_at != null,
         has_prep_completed: p.prep_completed_at != null,
         group_id: (p.group_id ?? null) as string | null,
+        is_late: p.participant_late === true,
       }
     })
     const groups = groupsSnap.docs.map((d) => {
@@ -1395,7 +1542,7 @@ export const getRoster = onRequest(async (req, res) => {
         status: g.status as string,
       }
     })
-    res.json({ ok: true, participants, groups })
+    res.json({ ok: true, participants, groups, session_live: attendanceCodeSnap.exists })
   } catch (err) {
     console.error('getRoster error:', err)
     res.status(500).json({ error: 'Internal error' })
@@ -1403,6 +1550,40 @@ export const getRoster = onRequest(async (req, res) => {
 })
 
 // ── Late-participant helpers ───────────────────────────────────────────────────
+
+/**
+ * Marks a participant as "Late" — present but unplaceable.
+ * Sets participant_late: true, which excludes them from getUnmatchedParticipants
+ * and causes finalizeInstance to write raw_score: null, normalized_score: null
+ * instead of the no_show floor of −2.
+ *
+ * Called automatically by the instructor dashboard when getUnmatchedParticipants
+ * returns a participant with suggested_group: null.
+ */
+export const markParticipantLate = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  if (!gameInstanceId) return
+
+  const participantId = body.participant_id
+  if (typeof participantId !== 'string' || !participantId) {
+    res.status(400).json({ error: 'participant_id is required' }); return
+  }
+
+  try {
+    const db = admin.firestore()
+    await db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('participants').doc(participantId)
+      .update({ participant_late: true })
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('markParticipantLate error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
 
 /**
  * Returns all participants who have verified attendance but are not yet in any
@@ -1450,7 +1631,7 @@ export const getUnmatchedParticipants = onRequest(async (req, res) => {
       }
     })
 
-    // Unmatched = attended + present + has valid role + not in any group.
+    // Unmatched = attended + present + has valid role + not in any group + not already marked Late.
     const unmatched = participantsSnap.docs
       .filter((doc) => {
         const d = doc.data()
@@ -1458,7 +1639,8 @@ export const getUnmatchedParticipants = onRequest(async (req, res) => {
           d.attendance_confirmed_at != null &&
           presentIds.has(doc.id) &&
           (d.role === 'Chris' || d.role === 'Kelly') &&
-          !matchedIds.has(doc.id)
+          !matchedIds.has(doc.id) &&
+          d.participant_late !== true
         )
       })
       .map((doc) => {
@@ -1690,8 +1872,8 @@ export const finalizeInstance = onCall(
 
     // Map each participant to a ParticipantRecord.
     // 'completed' = group finished (agreement or walk-away).
-    // 'no_show'   = everything else: group not completed, group_id absent, or truly absent.
-    //               All no_show cases receive normalized_score = -2 (floor marker).
+    // 'late'      = present but unplaceable; marked by instructor UI. normalized_score = null.
+    // 'no_show'   = everything else. normalized_score = -2 (floor marker).
     const participantRecords: ParticipantRecord[] = participantsSnap.docs
       .filter((doc) => {
         const role = doc.data().role
@@ -1702,10 +1884,14 @@ export const finalizeInstance = onCall(
         const groupOutcome = d.group_id
           ? completedGroups.get(d.group_id as string)
           : undefined
+        const status: 'completed' | 'late' | 'no_show' =
+          groupOutcome !== undefined ? 'completed'
+          : d.participant_late === true ? 'late'
+          : 'no_show'
         return {
           participant_id: doc.id,
           role: d.role as 'Chris' | 'Kelly',
-          status: groupOutcome !== undefined ? 'completed' : 'no_show',
+          status,
           agreement_reached: groupOutcome?.agreement_reached ?? false,
           final_price: groupOutcome?.final_price ?? null,
           knowledge_check_score: (d.knowledge_check_score ?? null) as number | null,

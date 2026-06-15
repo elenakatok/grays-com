@@ -597,8 +597,8 @@ export default function DevLauncher() {
 
         <p style={{ margin: '0 0 0.75rem', fontSize: '0.775rem', color: '#777' }}>
           <strong>Enrolled</strong> — roster only, no role/prep (Absent on dashboard).{' '}
-          <strong>Present</strong> — all N prepped + attendance confirmed; use Match Now on the dashboard to form groups.{' '}
-          <strong>Completed</strong> — all N matched with outcomes (walk-aways + 1 deadlocked group).
+          <strong>Present</strong> — ~70% of N prepped + attendance confirmed (rest stay absent); use Match Now on the dashboard to form groups.{' '}
+          <strong>Completed</strong> — present subset matched with outcomes (walk-aways + 1 deadlocked group); absent students remain as bare enrolled records.
         </p>
 
         {stageProgress && (

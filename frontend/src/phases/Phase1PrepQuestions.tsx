@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { doc, getDoc, updateDoc } from 'firebase/firestore'
 import { db } from '../firebase'
+import { parsePrice } from '../utils/parsePrice'
+
+const fmtPrice = (n: number) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n)
 
 type Props = {
   participantId: string
@@ -61,6 +65,7 @@ export default function Phase1PrepQuestions({ participantId, gameInstanceId, onC
   const [saving, setSaving] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [pendingConfirm, setPendingConfirm] = useState<number | null>(null)
 
   // Stable ref so the load effect doesn't re-run when onComplete identity changes.
   const onCompleteRef = useRef(onComplete)
@@ -118,12 +123,17 @@ export default function Phase1PrepQuestions({ participantId, gameInstanceId, onC
 
     let valueToStore: string | number = trimmed
     if (question.type === 'number') {
-      const num = Number(trimmed.replace(/,/g, ''))
-      if (!Number.isFinite(num) || num <= 0) {
+      const result = parsePrice(trimmed)
+      if (result.kind === 'invalid') {
         setValidationError('Please enter a valid dollar amount (positive number).')
         return
       }
-      valueToStore = num
+      if (result.kind === 'confirm') {
+        setValidationError(null)
+        setPendingConfirm(result.proposed)
+        return
+      }
+      valueToStore = result.value
     }
 
     setValidationError(null)
@@ -148,10 +158,35 @@ export default function Phase1PrepQuestions({ participantId, gameInstanceId, onC
     }
   }
 
+  const handleConfirmProposed = async () => {
+    if (pendingConfirm == null) return
+    const value = pendingConfirm
+    setPendingConfirm(null)
+    setValidationError(null)
+    setSaveError(null)
+    setSaving(true)
+    try {
+      await updateDoc(
+        doc(db, 'game_instances', gameInstanceId, 'participants', participantId),
+        { [question.field]: value },
+      )
+      if (isLast) {
+        onCompleteRef.current()
+      } else {
+        setStep((s) => s + 1)
+        setSaving(false)
+      }
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : 'Failed to save. Please try again.')
+      setSaving(false)
+    }
+  }
+
   const handleBack = () => {
     setStep((s) => s - 1)
     setValidationError(null)
     setSaveError(null)
+    setPendingConfirm(null)
   }
 
   return (
@@ -192,6 +227,7 @@ export default function Phase1PrepQuestions({ participantId, gameInstanceId, onC
             onChange={(e) => {
               setAnswers((prev) => ({ ...prev, [question.field]: e.target.value }))
               setValidationError(null)
+              setPendingConfirm(null)
             }}
             disabled={saving}
             style={{
@@ -206,51 +242,98 @@ export default function Phase1PrepQuestions({ participantId, gameInstanceId, onC
         </div>
       )}
 
-      {validationError && (
-        <p style={{ marginTop: '0.75rem', color: '#800', margin: '0.75rem 0 0' }}>
-          {validationError}
-        </p>
-      )}
-
       {saveError && (
         <p style={{ marginTop: '0.75rem', color: '#800', margin: '0.75rem 0 0' }}>{saveError}</p>
       )}
 
-      <div style={{ marginTop: '2rem', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-        {step > 0 && (
-          <button
-            onClick={handleBack}
-            disabled={saving}
-            style={{
-              padding: '0.75rem 1.5rem',
-              fontSize: '1rem',
-              cursor: saving ? 'not-allowed' : 'pointer',
-              background: 'none',
-              border: '1px solid #ccc',
-              borderRadius: '4px',
-              color: '#555',
-            }}
-          >
-            Back
-          </button>
-        )}
-        <button
-          onClick={() => void handleContinue()}
-          disabled={saving}
-          style={{
-            padding: '0.75rem 2rem',
-            fontSize: '1rem',
-            cursor: saving ? 'not-allowed' : 'pointer',
-            backgroundColor: saving ? '#999' : '#1a1a1a',
-            color: '#fff',
-            border: 'none',
-            borderRadius: '4px',
-            transition: 'background-color 0.15s',
-          }}
-        >
-          {saving ? 'Saving…' : isLast ? 'Complete' : 'Continue'}
-        </button>
-      </div>
+      {pendingConfirm != null ? (
+        <div style={{
+          marginTop: '1rem',
+          padding: '0.75rem',
+          background: '#f0f7ff',
+          border: '1px solid #b3d4f5',
+          borderRadius: 4,
+        }}>
+          <p style={{ margin: '0 0 0.6rem', fontSize: '0.95rem' }}>
+            You entered <strong>{fmtPrice(pendingConfirm)}</strong>. Is that correct?
+          </p>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              onClick={() => void handleConfirmProposed()}
+              disabled={saving}
+              style={{
+                padding: '0.75rem 2rem',
+                fontSize: '1rem',
+                cursor: saving ? 'not-allowed' : 'pointer',
+                backgroundColor: saving ? '#999' : '#1a1a1a',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+              }}
+            >
+              {saving ? 'Saving…' : 'Yes'}
+            </button>
+            <button
+              onClick={() => setPendingConfirm(null)}
+              disabled={saving}
+              style={{
+                padding: '0.75rem 1.5rem',
+                fontSize: '1rem',
+                background: 'none',
+                border: '1px solid #ccc',
+                borderRadius: '4px',
+                color: '#555',
+                cursor: saving ? 'not-allowed' : 'pointer',
+              }}
+            >
+              No
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {validationError && (
+            <p style={{ marginTop: '0.75rem', color: '#800', margin: '0.75rem 0 0' }}>
+              {validationError}
+            </p>
+          )}
+          <div style={{ marginTop: '2rem', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            {step > 0 && (
+              <button
+                onClick={handleBack}
+                disabled={saving}
+                style={{
+                  padding: '0.75rem 1.5rem',
+                  fontSize: '1rem',
+                  cursor: saving ? 'not-allowed' : 'pointer',
+                  background: 'none',
+                  border: '1px solid #ccc',
+                  borderRadius: '4px',
+                  color: '#555',
+                }}
+              >
+                Back
+              </button>
+            )}
+            <button
+              onClick={() => void handleContinue()}
+              disabled={saving}
+              style={{
+                padding: '0.75rem 2rem',
+                fontSize: '1rem',
+                cursor: saving ? 'not-allowed' : 'pointer',
+                backgroundColor: saving ? '#999' : '#1a1a1a',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                transition: 'background-color 0.15s',
+              }}
+            >
+              {saving ? 'Saving…' : isLast ? 'Complete' : 'Continue'}
+            </button>
+          </div>
+        </>
+      )}
     </main>
   )
 }
