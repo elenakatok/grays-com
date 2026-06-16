@@ -229,6 +229,7 @@ export default function Play() {
       <Phase1PrepQuestions
         participantId={participantId}
         gameInstanceId={gameInstanceId}
+        callArgs={callArgsRef.current!}
         onComplete={() => setPhase({ name: 'name-entry' })}
       />
     )

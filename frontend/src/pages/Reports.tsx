@@ -873,8 +873,10 @@ function ReportTile({
 
 // ── AI-analysis text export (generic — reusable across games) ────────────────
 
-/** Keys of T whose value is `string | null` — usable as a free-text export field. */
-type StringFieldOf<T> = { [K in keyof T]: T[K] extends string | null ? K : never }[keyof T]
+// Note: field is now typed as `string` (not a mapped keyof union) so dynamic
+// field names from instructor-added questions are accepted without casting.
+// Runtime access uses `(p as Record<string,unknown>)[field]` — safe because
+// buildGroupTextExport only reads, never writes, and checks `typeof val === 'string'`.
 
 interface GroupExportResult {
   text: string
@@ -895,7 +897,7 @@ interface GroupExportResult {
 function buildGroupTextExport(
   groups: ReportGroup[],
   participants: ReportParticipant[],
-  field: StringFieldOf<ReportParticipant>,
+  field: string,
   headerText: string,
 ): GroupExportResult {
   const byId = new Map(participants.map(p => [p.participant_id, p]))
@@ -922,7 +924,7 @@ function buildGroupTextExport(
       const lines: string[] = []
       for (const m of members) {
         const p = byId.get(m.id)
-        const val = p?.[field]
+        const val = p ? (p as Record<string, unknown>)[field] : undefined
         if (p && typeof val === 'string' && val.trim().length > 0) {
           lines.push(`  ${p.display_name} (${m.role}): ${val.trim()}`)
           responseCount++
@@ -1037,7 +1039,7 @@ function GroupTextExportTile({
   headerText: string
   groups: ReportGroup[] | null
   participants: ReportParticipant[] | null
-  field: StringFieldOf<ReportParticipant>
+  field: string
   /** Roughly half footprint — see ReportTile. The caption line is dropped
    *  at this size rather than letting it cram or overflow. */
   compact?: boolean
@@ -1086,12 +1088,9 @@ function GroupTextExportTile({
 const DEBRIEF_REFLECTION_HEADER =
   'Debrief reflection — "What surprised you about how the negotiation unfolded?"'
 
-const PREP_FIRST_TOPIC_HEADER =
-  'Prep Q1 — "When you sit down to talk, what is the first topic you will bring up with the other side?"'
-const PREP_QUESTION_FOR_OTHER_HEADER =
-  'Prep Q3 — "What question would you most like to ask the other side? Why?"'
-const PREP_PLANNED_OFFER_REASON_HEADER =
-  'Prep Q5 — "What is the reason for the number you gave?"'
+// Prep-question tile headers are now sourced from config.prep_text_questions so
+// editing a prompt in the Settings editor is immediately reflected here too.
+// The three formerly-hardcoded PREP_*_HEADER constants have been retired.
 
 // ── Reports page ──────────────────────────────────────────────────────────────
 
@@ -1334,32 +1333,23 @@ export default function Reports() {
               compact
             />
 
-            <GroupTextExportTile
-              title="Prep Q1: First Topic — Export for AI Analysis"
-              headerText={PREP_FIRST_TOPIC_HEADER}
-              groups={groups}
-              participants={participants}
-              field="prep_first_topic"
-              compact
-            />
-
-            <GroupTextExportTile
-              title="Prep Q3: Question for the Other Side — Export for AI Analysis"
-              headerText={PREP_QUESTION_FOR_OTHER_HEADER}
-              groups={groups}
-              participants={participants}
-              field="prep_question_for_other"
-              compact
-            />
-
-            <GroupTextExportTile
-              title="Prep Q5: Reason for Offer — Export for AI Analysis"
-              headerText={PREP_PLANNED_OFFER_REASON_HEADER}
-              groups={groups}
-              participants={participants}
-              field="prep_planned_offer_reason"
-              compact
-            />
+            {/* Dynamic prep-question tiles — driven by config.prep_text_questions.
+                Headers match the live prompt text; adding/editing/hiding a question
+                in the Settings editor is immediately reflected here on next open. */}
+            {(config?.prep_text_questions ?? [])
+              .slice()
+              .sort((a, b) => a.order - b.order)
+              .map((q, i) => (
+                <GroupTextExportTile
+                  key={q.field}
+                  title={`Prep Q${i + 1}: ${q.field} — Export for AI Analysis`}
+                  headerText={`Prep Q${i + 1} — "${q.prompt}"`}
+                  groups={groups}
+                  participants={participants}
+                  field={q.field}
+                  compact
+                />
+              ))}
           </div>
         </section>
 

@@ -153,6 +153,21 @@ export const getRoster = (args: InstructorDevArgs) =>
     args,
   )
 
+// ── Shared question type ──────────────────────────────────────────────────────
+
+/**
+ * A single instructor-configurable free-text prep question.
+ * Mirrors the backend PrepTextQuestion type in functions/src/index.ts.
+ */
+export type PrepTextQuestion = {
+  field: string
+  prompt: string
+  placeholder: string
+  order: number
+  hidden: boolean
+  deletable: boolean
+}
+
 // ── Reports ───────────────────────────────────────────────────────────────────
 
 export type ReportGroup = {
@@ -168,6 +183,7 @@ export type ReportGroup = {
 export type ReportConfig = {
   reservation_price_chris: number
   reservation_price_kelly: number
+  prep_text_questions: PrepTextQuestion[]
 }
 
 export type ReportParticipant = {
@@ -176,10 +192,13 @@ export type ReportParticipant = {
   role: 'Chris' | 'Kelly'
   prep_planned_first_offer:   number | null
   prep_estimated_other_price: number | null
+  // Known named fields (the three original text questions + debrief):
   prep_first_topic:          string | null
   prep_question_for_other:   string | null
   prep_planned_offer_reason: string | null
   debrief_reflection: string | null
+  // Dynamic fields for instructor-added questions (arbitrary prep_* names):
+  [key: string]: unknown
 }
 
 /** Returns group outcomes, game config, and per-participant prep answers for the Reports page. */
@@ -195,6 +214,7 @@ export type GameConfigResult = {
   public_info_url: string
   chris_info_url:  string
   kelly_info_url:  string
+  prep_text_questions: PrepTextQuestion[]
 }
 
 /** Reads the full game config from config/main for the Settings page. */
@@ -211,6 +231,12 @@ export const updateGameConfig = (
   fields: Partial<Omit<GameConfigResult, 'ok'>>,
 ) =>
   callFunction<GameConfigResult>('updateGameConfig', { ...args, ...fields })
+
+// ── Student question delivery ─────────────────────────────────────────────────
+
+/** Returns visible, ordered free-text prep questions for the current student session. */
+export const getStudentPrepQuestions = (args: CallArgs) =>
+  callFunction<{ ok: boolean; questions: PrepTextQuestion[] }>('getStudentPrepQuestions', args)
 
 // ── Late-participant helpers ───────────────────────────────────────────────────
 

@@ -1561,6 +1561,20 @@ export const getReportData = onRequest(async (req, res) => {
           prep_question_for_other:   (p.prep_question_for_other   ?? null) as string | null,
           prep_planned_offer_reason: (p.prep_planned_offer_reason ?? null) as string | null,
           debrief_reflection: (p.debrief_reflection ?? null) as string | null,
+          // Dynamic fields for instructor-added free-text questions.
+          // Collect all string-valued keys that start with prep_ but aren't
+          // the hardcoded numeric ones already mapped above.
+          ...(Object.fromEntries(
+            Object.entries(p)
+              .filter(([k, v]) =>
+                k.startsWith('prep_') &&
+                !['prep_planned_first_offer', 'prep_estimated_other_price',
+                  'prep_first_topic', 'prep_question_for_other',
+                  'prep_planned_offer_reason'].includes(k) &&
+                (typeof v === 'string' || v === null),
+              )
+              .map(([k, v]) => [k, (v ?? null) as string | null]),
+          ) as Record<string, string | null>),
         }
       })
       .filter((p) => p.role === 'Chris' || p.role === 'Kelly')
@@ -1571,6 +1585,7 @@ export const getReportData = onRequest(async (req, res) => {
         ? (cd.reservation_price_chris as number) : 25_000,
       reservation_price_kelly: typeof cd.reservation_price_kelly === 'number'
         ? (cd.reservation_price_kelly as number) : 475_000,
+      prep_text_questions: parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS,
     }
 
     res.json({ ok: true, groups, config, participants })
@@ -1877,6 +1892,88 @@ const RESERVATION_PRICE_DEFAULTS = {
   reservation_price_kelly: 475_000,  // Kelly's ceiling: 1% of $47.5M ticket sales
 } as const
 
+// ── Free-text prep questions ────────────────────────────────────────────────
+
+/** A single instructor-configurable free-text prep question. */
+export type PrepTextQuestion = {
+  /** Participant doc field name the answer writes to (must start with prep_). */
+  field: string
+  /** The question prompt shown to students. */
+  prompt: string
+  /** Textarea placeholder hint. */
+  placeholder: string
+  /** Sort key in the merged question list. Even values (0, 2, 4 …) leave
+   *  room for the hardcoded numeric questions at positions 1 and 3. */
+  order: number
+  /** When true the question is skipped in the student flow. */
+  hidden: boolean
+  /** True for all instructor-created questions; false for system questions
+   *  (reserved for Slice 2 non-deletable enforcement). */
+  deletable: boolean
+}
+
+/**
+ * Default free-text prep questions — mirrors the hardcoded QUESTIONS array in
+ * Phase1PrepQuestions.tsx. Used as the fallback when prep_text_questions is
+ * absent from config/main (i.e., before the instructor has opened Settings).
+ * Order values 0, 2, 4 interleave with hardcoded numeric questions at 1, 3.
+ */
+const DEFAULT_PREP_TEXT_QUESTIONS: PrepTextQuestion[] = [
+  {
+    field: 'prep_first_topic',
+    prompt: 'When you sit down to talk, what is the first topic you will bring up with the other side?',
+    placeholder: '',
+    order: 0,
+    hidden: false,
+    deletable: true,
+  },
+  {
+    field: 'prep_question_for_other',
+    prompt: 'What question would you most like to ask the other side? Why?',
+    placeholder: '',
+    order: 2,
+    hidden: false,
+    deletable: true,
+  },
+  {
+    field: 'prep_planned_offer_reason',
+    prompt: 'What is the reason for the number you gave?',
+    placeholder: '',
+    order: 4,
+    hidden: false,
+    deletable: true,
+  },
+]
+
+function parsePrepTextQuestions(raw: unknown): PrepTextQuestion[] | null {
+  if (!Array.isArray(raw)) return null
+  const result: PrepTextQuestion[] = []
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null) return null
+    const q = item as Record<string, unknown>
+    if (typeof q.field        !== 'string'  || !q.field.startsWith('prep_')) return null
+    if (typeof q.prompt       !== 'string')                                   return null
+    if (typeof q.placeholder  !== 'string')                                   return null
+    if (typeof q.order        !== 'number'  || !Number.isFinite(q.order))     return null
+    if (typeof q.hidden       !== 'boolean')                                   return null
+    if (typeof q.deletable    !== 'boolean')                                   return null
+    result.push({
+      field:       q.field       as string,
+      prompt:      q.prompt      as string,
+      placeholder: q.placeholder as string,
+      order:       q.order       as number,
+      hidden:      q.hidden      as boolean,
+      deletable:   q.deletable   as boolean,
+    })
+  }
+  // Guard against absurd sizes.
+  if (result.length > 50) return null
+  // Guard against duplicate field names.
+  const fields = result.map(q => q.field)
+  if (new Set(fields).size !== fields.length) return null
+  return result
+}
+
 /**
  * Finalizes a game instance: reads all participant and group records, computes
  * per-role z-scores via computeZScores(), and writes raw_score / normalized_score
@@ -2005,13 +2102,10 @@ export const finalizeInstance = onCall(
 // ── Game config — Settings page ─────────────────────────────────────────────
 
 /**
- * Returns the full game config for the Settings page: reservation prices
- * (with RESERVATION_PRICE_DEFAULTS fallback) and the three info-URL fields
- * (empty string when absent — they have no meaningful default).
+ * Returns the full game config for the Settings page: reservation prices,
+ * info-URL fields, and the editable prep_text_questions list.
  *
  * Request body (emulator): { _dev: { game_instance_id } }
- * Response: { ok, reservation_price_chris, reservation_price_kelly,
- *              public_info_url, chris_info_url, kelly_info_url }
  */
 export const getGameConfig = onRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
@@ -2037,6 +2131,7 @@ export const getGameConfig = onRequest(async (req, res) => {
       public_info_url: typeof cd.public_info_url  === 'string' ? (cd.public_info_url  as string) : '',
       chris_info_url:  typeof cd.chris_info_url   === 'string' ? (cd.chris_info_url   as string) : '',
       kelly_info_url:  typeof cd.kelly_info_url   === 'string' ? (cd.kelly_info_url   as string) : '',
+      prep_text_questions: parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS,
     })
   } catch (err) {
     console.error('getGameConfig error:', err)
@@ -2106,6 +2201,15 @@ export const updateGameConfig = onRequest(async (req, res) => {
     update[field] = v
   }
 
+  // ── prep_text_questions ────────────────────────────────────────────
+  if ('prep_text_questions' in body) {
+    const parsed = parsePrepTextQuestions(body.prep_text_questions)
+    if (parsed === null) {
+      res.status(400).json({ error: 'prep_text_questions: invalid shape — must be an array of {field(prep_*),prompt,placeholder,order,hidden,deletable} with unique field names' }); return
+    }
+    update.prep_text_questions = parsed
+  }
+
   if (Object.keys(update).length === 0) {
     res.status(400).json({ error: 'No recognised fields to update' }); return
   }
@@ -2133,9 +2237,47 @@ export const updateGameConfig = onRequest(async (req, res) => {
       public_info_url: typeof cd.public_info_url === 'string' ? (cd.public_info_url as string) : '',
       chris_info_url:  typeof cd.chris_info_url  === 'string' ? (cd.chris_info_url  as string) : '',
       kelly_info_url:  typeof cd.kelly_info_url  === 'string' ? (cd.kelly_info_url  as string) : '',
+      prep_text_questions: parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS,
     })
   } catch (err) {
     console.error('updateGameConfig error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+// ── Student question delivery ───────────────────────────────────────────────
+
+/**
+ * Returns the visible, ordered free-text prep questions for a student's session.
+ * Hidden questions are excluded. Numeric prep questions are hardcoded in the
+ * client and are not returned here.
+ *
+ * Falls back to DEFAULT_PREP_TEXT_QUESTIONS when config/main has no stored list.
+ *
+ * Request body: { token | _test: { participant_id, game_instance_id } }
+ * Response: { ok, questions: PrepTextQuestion[] }
+ */
+export const getStudentPrepQuestions = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const ids = extractStudentIds(body, isEmulator, res)
+  if (!ids) return
+  const { gameInstanceId } = ids
+
+  try {
+    const db = admin.firestore()
+    const snap = await db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('config').doc('main').get()
+    const cd = (snap.data() ?? {}) as Record<string, unknown>
+    const all = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
+    const visible = all
+      .filter(q => !q.hidden)
+      .sort((a, b) => a.order - b.order)
+    res.json({ ok: true, questions: visible })
+  } catch (err) {
+    console.error('getStudentPrepQuestions error:', err)
     res.status(500).json({ error: 'Internal error' })
   }
 })
