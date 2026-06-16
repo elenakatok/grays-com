@@ -779,11 +779,17 @@ function ReportTile({
   title,
   onProject,
   disabled,
+  actionLabel = 'Project ↗',
+  compact = false,
   children,
 }: {
   title: string
   onProject: () => void
   disabled?: boolean
+  actionLabel?: string
+  /** Modifier for the AI-Analysis Export tiles — roughly half footprint in
+   *  both directions. Chart tiles (Outcomes/Preparation) never pass this. */
+  compact?: boolean
   children: React.ReactNode
 }) {
   const [hov, setHov] = useState(false)
@@ -798,7 +804,7 @@ function ReportTile({
       style={{
         background: '#fff',
         border: `1.5px solid ${active ? '#3b82f6' : '#e2e8f0'}`,
-        borderRadius: 8,
+        borderRadius: compact ? 6 : 8,
         overflow: 'hidden',
         cursor: disabled ? 'default' : 'pointer',
         boxShadow: active
@@ -815,23 +821,29 @@ function ReportTile({
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
-        gap: '0.5rem',
-        padding: '0.45rem 0.75rem',
+        gap: '0.4rem',
+        padding: compact ? '0.3rem 0.45rem' : '0.45rem 0.75rem',
         borderBottom: '1px solid #f0f4f8',
         background: active ? '#eff6ff' : '#fafafa',
         transition: 'background 0.13s',
-        minHeight: 38,
+        minHeight: compact ? 20 : 38,
       }}>
-        <span style={{
-          fontSize: '0.78rem',
-          fontWeight: 600,
-          color: '#1e293b',
-          lineHeight: 1.35,
-        }}>
+        <span
+          title={compact ? title : undefined}
+          style={{
+            fontSize: compact ? '0.62rem' : '0.78rem',
+            fontWeight: 600,
+            color: '#1e293b',
+            lineHeight: 1.3,
+            ...(compact
+              ? { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+              : {}),
+          }}
+        >
           {title}
         </span>
         <span style={{
-          fontSize: '0.7rem',
+          fontSize: compact ? '0.56rem' : '0.7rem',
           fontWeight: 500,
           color: active ? '#2563eb' : '#cbd5e1',
           whiteSpace: 'nowrap',
@@ -839,13 +851,13 @@ function ReportTile({
           paddingTop: 1,
           transition: 'color 0.13s',
         }}>
-          {disabled ? '—' : 'Project ↗'}
+          {disabled ? '—' : actionLabel}
         </span>
       </div>
 
       {/* Preview — scales the SVG down; overflow clips the bottom */}
       <div style={{
-        height: 168,
+        height: compact ? 84 : 168,
         overflow: 'hidden',
         background: '#f8fafc',
         opacity: disabled ? 0.38 : 1,
@@ -858,6 +870,228 @@ function ReportTile({
     </div>
   )
 }
+
+// ── AI-analysis text export (generic — reusable across games) ────────────────
+
+/** Keys of T whose value is `string | null` — usable as a free-text export field. */
+type StringFieldOf<T> = { [K in keyof T]: T[K] extends string | null ? K : never }[keyof T]
+
+interface GroupExportResult {
+  text: string
+  groupCount: number
+  responseCount: number
+}
+
+/**
+ * Builds one plain-text block for the whole class: a header line + summary,
+ * then one paragraph per completed group naming every member (role + name)
+ * and the group's final price (or "No deal"), followed by that member's
+ * response to `field`. Members with no response are simply omitted from
+ * their group's lines; groups with zero responses still show their header.
+ *
+ * Generic over `field` / `headerText` so other games can reuse this exact
+ * group-iteration + formatting logic for their own open-text debrief questions.
+ */
+function buildGroupTextExport(
+  groups: ReportGroup[],
+  participants: ReportParticipant[],
+  field: StringFieldOf<ReportParticipant>,
+  headerText: string,
+): GroupExportResult {
+  const byId = new Map(participants.map(p => [p.participant_id, p]))
+
+  const blocks: { header: string; lines: string[] }[] = []
+  let responseCount = 0
+
+  groups
+    .filter(g => g.status === 'completed')
+    .forEach((g, i) => {
+      const chrisNames = g.chris_participants.map(id => byId.get(id)?.display_name).filter((n): n is string => !!n)
+      const kellyNames = g.kelly_participants.map(id => byId.get(id)?.display_name).filter((n): n is string => !!n)
+      const compositionParts: string[] = []
+      if (chrisNames.length) compositionParts.push(`Chris: ${chrisNames.join(', ')}`)
+      if (kellyNames.length) compositionParts.push(`Kelly: ${kellyNames.join(', ')}`)
+      const priceLabel = g.agreement_reached === true && g.final_price != null
+        ? `final price ${USD.format(g.final_price)}`
+        : 'No deal'
+
+      const members: { id: string; role: 'Chris' | 'Kelly' }[] = [
+        ...g.chris_participants.map(id => ({ id, role: 'Chris' as const })),
+        ...g.kelly_participants.map(id => ({ id, role: 'Kelly' as const })),
+      ]
+      const lines: string[] = []
+      for (const m of members) {
+        const p = byId.get(m.id)
+        const val = p?.[field]
+        if (p && typeof val === 'string' && val.trim().length > 0) {
+          lines.push(`  ${p.display_name} (${m.role}): ${val.trim()}`)
+          responseCount++
+        }
+      }
+      blocks.push({ header: `Group ${i + 1} — ${compositionParts.join(' · ')} — ${priceLabel}`, lines })
+    })
+
+  const groupCount = blocks.length
+  const summary = `${groupCount} group${groupCount === 1 ? '' : 's'} · ${responseCount} response${responseCount === 1 ? '' : 's'}`
+  const body = blocks.map(b => [b.header, ...b.lines].join('\n')).join('\n\n')
+  const text = responseCount > 0
+    ? `${headerText}\n${summary}\n\n${body}`
+    : `${headerText}\n\nNo reflection responses yet.`
+
+  return { text, groupCount, responseCount }
+}
+
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-+|-+$)/g, '')
+}
+
+function downloadTextFile(text: string, filename: string) {
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ── Export preview modal — copy / download the generated text block ─────────
+
+function ExportModal({
+  title,
+  text,
+  onClose,
+}: {
+  title: string
+  text: string
+  onClose: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
+      .catch(() => { /* clipboard unavailable — text is still selectable below */ })
+  }
+  const handleDownload = () => downloadTextFile(text, `${slugify(title)}.txt`)
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '2rem', zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#fff', borderRadius: 10, width: 'min(820px, 100%)',
+          maxHeight: '100%', display: 'flex', flexDirection: 'column',
+          boxShadow: '0 12px 60px rgba(0,0,0,0.35)', overflow: 'hidden',
+        }}
+      >
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '0.875rem 1.25rem', borderBottom: '1px solid #e2e8f0', gap: '1rem',
+        }}>
+          <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 600, color: '#1e293b' }}>{title}</h2>
+          <button onClick={onClose} style={{ fontSize: '0.8rem' }}>✕ Close</button>
+        </div>
+        <div style={{
+          display: 'flex', gap: '0.5rem', padding: '0.75rem 1.25rem',
+          borderBottom: '1px solid #f0f4f8',
+        }}>
+          <button onClick={handleCopy} style={{ fontSize: '0.825rem', padding: '0.4rem 0.875rem' }}>
+            {copied ? 'Copied ✓' : 'Copy to Clipboard'}
+          </button>
+          <button onClick={handleDownload} style={{ fontSize: '0.825rem', padding: '0.4rem 0.875rem' }}>
+            Download .txt (whole class)
+          </button>
+        </div>
+        <pre style={{
+          margin: 0, padding: '1.25rem', overflow: 'auto', flex: 1,
+          fontSize: '0.8rem', lineHeight: 1.55, whiteSpace: 'pre-wrap',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          color: '#1e293b', background: '#f8fafc',
+        }}>
+          {text}
+        </pre>
+      </div>
+    </div>
+  )
+}
+
+// ── Group text export tile ───────────────────────────────────────────────────
+
+function GroupTextExportTile({
+  title,
+  headerText,
+  groups,
+  participants,
+  field,
+  compact = false,
+}: {
+  title: string
+  headerText: string
+  groups: ReportGroup[] | null
+  participants: ReportParticipant[] | null
+  field: StringFieldOf<ReportParticipant>
+  /** Roughly half footprint — see ReportTile. The caption line is dropped
+   *  at this size rather than letting it cram or overflow. */
+  compact?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const ready = groups != null && participants != null
+  const result = ready ? buildGroupTextExport(groups, participants, field, headerText) : null
+
+  return (
+    <>
+      <ReportTile title={title} onProject={() => setOpen(true)} disabled={!ready} actionLabel="Open ↗" compact={compact}>
+        {result && (
+          <div style={{
+            width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center',
+            padding: compact ? '0.4rem' : '1rem', textAlign: 'center',
+          }}>
+            {result.responseCount === 0 ? (
+              <span style={{ color: '#94a3b8', fontSize: compact ? '0.68rem' : '0.875rem' }}>
+                No reflection responses yet.
+              </span>
+            ) : compact ? (
+              <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#111' }}>
+                {result.groupCount} groups · {result.responseCount} responses
+              </span>
+            ) : (
+              <>
+                <span style={{ fontSize: '1.5rem', fontWeight: 700, color: '#111' }}>
+                  {result.groupCount} groups · {result.responseCount} responses
+                </span>
+                <span style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#94a3b8' }}>
+                  Click to copy or download for the whole class
+                </span>
+              </>
+            )}
+          </div>
+        )}
+      </ReportTile>
+      {open && result && (
+        <ExportModal title={title} text={result.text} onClose={() => setOpen(false)} />
+      )}
+    </>
+  )
+}
+
+const DEBRIEF_REFLECTION_HEADER =
+  'Debrief reflection — "What surprised you about how the negotiation unfolded?"'
+
+const PREP_FIRST_TOPIC_HEADER =
+  'Prep Q1 — "When you sit down to talk, what is the first topic you will bring up with the other side?"'
+const PREP_QUESTION_FOR_OTHER_HEADER =
+  'Prep Q3 — "What question would you most like to ask the other side? Why?"'
+const PREP_PLANNED_OFFER_REASON_HEADER =
+  'Prep Q5 — "What is the reason for the number you gave?"'
 
 // ── Reports page ──────────────────────────────────────────────────────────────
 
@@ -1080,11 +1314,53 @@ export default function Reports() {
         </section>
 
         {/* ── AI-Analysis Exports ──────────────────────────────────── */}
+        {/* Tiles here use ReportTile/GroupTextExportTile's `compact` modifier —
+            roughly half footprint of the chart tiles above, since the thumbnail
+            doesn't carry enough information to justify the full size. The
+            narrower grid track (170px vs. 340px) is scoped to this section only. */}
         <section style={{ marginTop: '1.75rem' }}>
           <p style={sectionLabel}>AI-Analysis Exports</p>
-          <p style={{ color: '#94a3b8', fontSize: '0.875rem', margin: 0 }}>
-            Coming soon — exports for AI-assisted class debrief.
-          </p>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))',
+            gap: '0.75rem',
+          }}>
+            <GroupTextExportTile
+              title="Debrief Reflections — Export for AI Analysis"
+              headerText={DEBRIEF_REFLECTION_HEADER}
+              groups={groups}
+              participants={participants}
+              field="debrief_reflection"
+              compact
+            />
+
+            <GroupTextExportTile
+              title="Prep Q1: First Topic — Export for AI Analysis"
+              headerText={PREP_FIRST_TOPIC_HEADER}
+              groups={groups}
+              participants={participants}
+              field="prep_first_topic"
+              compact
+            />
+
+            <GroupTextExportTile
+              title="Prep Q3: Question for the Other Side — Export for AI Analysis"
+              headerText={PREP_QUESTION_FOR_OTHER_HEADER}
+              groups={groups}
+              participants={participants}
+              field="prep_question_for_other"
+              compact
+            />
+
+            <GroupTextExportTile
+              title="Prep Q5: Reason for Offer — Export for AI Analysis"
+              headerText={PREP_PLANNED_OFFER_REASON_HEADER}
+              groups={groups}
+              participants={participants}
+              field="prep_planned_offer_reason"
+              compact
+            />
+          </div>
         </section>
 
       </main>

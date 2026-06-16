@@ -161,6 +161,8 @@ export type ReportGroup = {
   agreement_reached: boolean | null
   final_price: number | null
   group_initial_price: number | null
+  chris_participants: string[]
+  kelly_participants: string[]
 }
 
 export type ReportConfig = {
@@ -170,14 +172,45 @@ export type ReportConfig = {
 
 export type ReportParticipant = {
   participant_id: string
+  display_name: string
   role: 'Chris' | 'Kelly'
   prep_planned_first_offer:   number | null
   prep_estimated_other_price: number | null
+  prep_first_topic:          string | null
+  prep_question_for_other:   string | null
+  prep_planned_offer_reason: string | null
+  debrief_reflection: string | null
 }
 
 /** Returns group outcomes, game config, and per-participant prep answers for the Reports page. */
 export const getReportData = (args: InstructorDevArgs) =>
   callFunction<{ ok: boolean; groups: ReportGroup[]; config: ReportConfig; participants: ReportParticipant[] }>('getReportData', args)
+
+// ── Settings page — game config ────────────────────────────────────────────
+
+export type GameConfigResult = {
+  ok: boolean
+  reservation_price_chris: number
+  reservation_price_kelly: number
+  public_info_url: string
+  chris_info_url:  string
+  kelly_info_url:  string
+}
+
+/** Reads the full game config from config/main for the Settings page. */
+export const getGameConfig = (args: InstructorDevArgs) =>
+  callFunction<GameConfigResult>('getGameConfig', args)
+
+/**
+ * Merge-writes any subset of config/main fields; only the keys present in
+ * `fields` are written — all other fields on the doc are left untouched.
+ * The response is the full current config after the write.
+ */
+export const updateGameConfig = (
+  args: InstructorDevArgs,
+  fields: Partial<Omit<GameConfigResult, 'ok'>>,
+) =>
+  callFunction<GameConfigResult>('updateGameConfig', { ...args, ...fields })
 
 // ── Late-participant helpers ───────────────────────────────────────────────────
 

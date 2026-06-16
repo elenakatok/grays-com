@@ -458,6 +458,11 @@ export default function InstructorDashboard() {
             Reports →
           </button>
 
+          {/* Settings */}
+          <button onClick={() => navigate(devGameInstanceId ? `/settings?_dev_game_instance_id=${devGameInstanceId}` : '/settings')}>
+            Settings →
+          </button>
+
           {codeError && (
             <span style={{ fontSize: '0.7rem', color: '#c00' }}>{codeError}</span>
           )}

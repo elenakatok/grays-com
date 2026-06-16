@@ -842,6 +842,60 @@ function simPrepFields(role: 'Chris' | 'Kelly'): {
     : { prep_planned_first_offer: randInt(250_000, 550_000), prep_estimated_other_price: randInt(25_000, 200_000) }
 }
 
+// Placeholder open-text reflections — the real `debrief_reflection` question is
+// authored later via the questions editor. Seeding a few here lets the
+// AI-Analysis Export report render/copy/download before that editor exists.
+const SIM_DEBRIEF_REFLECTIONS = [
+  "I wish I'd anchored higher with my opening offer.",
+  'Learning the other side\'s walk-away price earlier would have changed my strategy.',
+  'I felt pressure to concede too quickly once the silence got long.',
+  'Building rapport first made the back-and-forth much easier later on.',
+  'I underestimated how much the first offer anchors the whole negotiation.',
+  "Next time I'd ask more questions before naming a number.",
+  'Staying patient paid off — the final price ended up closer to my target.',
+  'I should have prepared a stronger justification for my counteroffer.',
+]
+function simDebriefReflection(): string {
+  return SIM_DEBRIEF_REFLECTIONS[Math.floor(Math.random() * SIM_DEBRIEF_REFLECTIONS.length)]
+}
+
+// PLACEHOLDER — `prep_first_topic` / `prep_question_for_other` / `prep_planned_offer_reason`
+// are written client-side only (Phase1PrepQuestions) and are never seeded by simulate-at-scale,
+// so there's no real data for their AI-Analysis Export tiles today. These three sentence
+// pools exist solely to populate those tiles for demo/dev purposes. Remove this block (and
+// the seeding below that uses it) once simulate-at-scale writes real prep answers instead —
+// i.e. once the questions editor / prep flow is wired into the simulated seed path.
+const SIM_PREP_FIRST_TOPIC = [
+  "I'd open by asking about their timeline — when do they need this done?",
+  "I'd start with small talk to build some rapport before getting into numbers.",
+  "I'd ask what matters most to them about this deal.",
+  "I'd lead with my own constraints so expectations are set early.",
+  "I'd ask if they've talked to other parties about this.",
+]
+const SIM_PREP_QUESTION_FOR_OTHER = [
+  'What is your real deadline for closing this? I want to know if there is room to wait.',
+  "What would make this deal a clear win for you, beyond the price?",
+  'Have you already gotten other offers? I want to gauge how much leverage you have.',
+  'Is the price the only thing standing in the way, or are there other terms that matter to you?',
+  'What is driving your number — is it based on comparable sales or something else?',
+]
+const SIM_PREP_PLANNED_OFFER_REASON = [
+  'I picked a number close to my target so I have room to negotiate down without going below my floor.',
+  'I anchored aggressively to set the tone and see how they react.',
+  'I based it on what similar deals have closed at recently.',
+  "I left some cushion in case they push back hard on the first offer.",
+  'I wanted a round number that signals I am serious but still flexible.',
+]
+function simPrepFirstTopic(): string {
+  return SIM_PREP_FIRST_TOPIC[Math.floor(Math.random() * SIM_PREP_FIRST_TOPIC.length)]
+}
+function simPrepQuestionForOther(): string {
+  return SIM_PREP_QUESTION_FOR_OTHER[Math.floor(Math.random() * SIM_PREP_QUESTION_FOR_OTHER.length)]
+}
+function simPrepPlannedOfferReason(): string {
+  return SIM_PREP_PLANNED_OFFER_REASON[Math.floor(Math.random() * SIM_PREP_PLANNED_OFFER_REASON.length)]
+}
+
 /**
  * Seeds N simulated students at a chosen stage (cumulative).
  * Three cumulative stages: enrolled → present → completed.
@@ -1071,6 +1125,23 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
         lead_outcome: { no_deal: isWalkAway, price: finalPrice },
         group_initial_price: simPrice(priceChris, priceKelly),
       })
+
+      // ~60% of members in each completed group leave a placeholder reflection,
+      // so the AI-Analysis Export demonstrates both populated and omitted lines.
+      // Same treatment for the three free-text prep fields (PLACEHOLDER — see
+      // SIM_PREP_* comment above; rolled independently per field so each export
+      // tile shows its own realistic mix of populated and omitted members).
+      const group = rawGroups[i]
+      for (const pid of [...group.chris_participants, ...group.kelly_participants]) {
+        const update: Record<string, string> = {}
+        if (Math.random() < 0.6) update.debrief_reflection = simDebriefReflection()
+        if (Math.random() < 0.6) update.prep_first_topic = simPrepFirstTopic()
+        if (Math.random() < 0.6) update.prep_question_for_other = simPrepQuestionForOther()
+        if (Math.random() < 0.6) update.prep_planned_offer_reason = simPrepPlannedOfferReason()
+        if (Object.keys(update).length > 0) {
+          outcomeBatch.update(instanceRef.collection('participants').doc(pid), update)
+        }
+      }
     }
   }
   await outcomeBatch.commit()
@@ -1472,6 +1543,8 @@ export const getReportData = onRequest(async (req, res) => {
         agreement_reached: (g.agreement_reached ?? null) as boolean | null,
         final_price: (g.final_price ?? null) as number | null,
         group_initial_price: (g.group_initial_price ?? null) as number | null,
+        chris_participants: (g.chris_participants ?? []) as string[],
+        kelly_participants: (g.kelly_participants ?? []) as string[],
       }
     })
 
@@ -1480,9 +1553,14 @@ export const getReportData = onRequest(async (req, res) => {
         const p = d.data()
         return {
           participant_id: d.id as string,
+          display_name: ((p.name ?? p.display_name ?? '') as string),
           role: (p.role ?? null) as 'Chris' | 'Kelly' | null,
           prep_planned_first_offer:   (p.prep_planned_first_offer   ?? null) as number | null,
           prep_estimated_other_price: (p.prep_estimated_other_price ?? null) as number | null,
+          prep_first_topic:          (p.prep_first_topic          ?? null) as string | null,
+          prep_question_for_other:   (p.prep_question_for_other   ?? null) as string | null,
+          prep_planned_offer_reason: (p.prep_planned_offer_reason ?? null) as string | null,
+          debrief_reflection: (p.debrief_reflection ?? null) as string | null,
         }
       })
       .filter((p) => p.role === 'Chris' || p.role === 'Kelly')
@@ -1791,6 +1869,14 @@ export const addLateParticipant = onRequest(async (req, res) => {
   }
 })
 
+// ── Reservation-price defaults ─────────────────────────────────────────────
+// Single source of truth for both finalizeInstance scoring and the Settings
+// page; must stay in sync with the standard role PDFs shipped with the scenario.
+const RESERVATION_PRICE_DEFAULTS = {
+  reservation_price_chris: 25_000,   // Chris's floor: cost to switch domains
+  reservation_price_kelly: 475_000,  // Kelly's ceiling: 1% of $47.5M ticket sales
+} as const
+
 /**
  * Finalizes a game instance: reads all participant and group records, computes
  * per-role z-scores via computeZScores(), and writes raw_score / normalized_score
@@ -1821,10 +1907,7 @@ export const finalizeInstance = onCall(
 
     // Standard reservation-price defaults — match the standard role PDFs.
     // Must stay in sync with the PDFs if an instructor ever overrides them in config.
-    const STANDARD_DEFAULTS = {
-      reservation_price_chris: 25_000,   // Chris's floor: cost to switch domains
-      reservation_price_kelly: 475_000,  // Kelly's ceiling: 1% of $47.5M ticket sales
-    } as const
+    const STANDARD_DEFAULTS = RESERVATION_PRICE_DEFAULTS
 
     // Three cases for reservation prices:
     //   1. Config document loaded and both fields are present → use them (instructor override).
@@ -1918,3 +2001,141 @@ export const finalizeInstance = onCall(
     return { ok: true, scored: { Chris: chrisCount, Kelly: kellyCount, total: results.length } }
   },
 )
+
+// ── Game config — Settings page ─────────────────────────────────────────────
+
+/**
+ * Returns the full game config for the Settings page: reservation prices
+ * (with RESERVATION_PRICE_DEFAULTS fallback) and the three info-URL fields
+ * (empty string when absent — they have no meaningful default).
+ *
+ * Request body (emulator): { _dev: { game_instance_id } }
+ * Response: { ok, reservation_price_chris, reservation_price_kelly,
+ *              public_info_url, chris_info_url, kelly_info_url }
+ */
+export const getGameConfig = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  if (!gameInstanceId) return
+
+  try {
+    const db = admin.firestore()
+    const snap = await db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('config').doc('main').get()
+    const cd = (snap.data() ?? {}) as Record<string, unknown>
+    res.json({
+      ok: true,
+      reservation_price_chris: typeof cd.reservation_price_chris === 'number'
+        ? (cd.reservation_price_chris as number)
+        : RESERVATION_PRICE_DEFAULTS.reservation_price_chris,
+      reservation_price_kelly: typeof cd.reservation_price_kelly === 'number'
+        ? (cd.reservation_price_kelly as number)
+        : RESERVATION_PRICE_DEFAULTS.reservation_price_kelly,
+      public_info_url: typeof cd.public_info_url  === 'string' ? (cd.public_info_url  as string) : '',
+      chris_info_url:  typeof cd.chris_info_url   === 'string' ? (cd.chris_info_url   as string) : '',
+      kelly_info_url:  typeof cd.kelly_info_url   === 'string' ? (cd.kelly_info_url   as string) : '',
+    })
+  } catch (err) {
+    console.error('getGameConfig error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+/**
+ * Writes any subset of config/main fields with { merge: true } — only the
+ * fields present in the request body are written; all other fields (prices,
+ * URL slots, future additions) are left untouched.
+ *
+ * Each Settings section saves independently:
+ *   - Reservation Prices section sends only the two price fields.
+ *   - PDF Info Links section sends only the three URL fields.
+ *
+ * Validation:
+ *   Prices (if present) — must be positive integers.
+ *   URLs   (if present) — must be empty string OR a well-formed http(s) URL.
+ *   At least one recognised field must be present.
+ *
+ * Request body (emulator): { _dev: { game_instance_id }, ...fields }
+ * Response: full current config (all five fields) after the write.
+ */
+export const updateGameConfig = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  if (!gameInstanceId) return
+
+  // Build the partial update — only validated, present fields are written.
+  const update: Record<string, unknown> = {}
+
+  // ── Prices ────────────────────────────────────────────────────────
+  if ('reservation_price_chris' in body) {
+    const v = body.reservation_price_chris
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || !Number.isInteger(v)) {
+      res.status(400).json({ error: 'reservation_price_chris must be a positive integer' }); return
+    }
+    update.reservation_price_chris = v
+  }
+  if ('reservation_price_kelly' in body) {
+    const v = body.reservation_price_kelly
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || !Number.isInteger(v)) {
+      res.status(400).json({ error: 'reservation_price_kelly must be a positive integer' }); return
+    }
+    update.reservation_price_kelly = v
+  }
+
+  // ── URL fields ────────────────────────────────────────────────────
+  // Empty string = intentionally unset (allowed). Non-empty must be http(s).
+  for (const field of ['public_info_url', 'chris_info_url', 'kelly_info_url'] as const) {
+    if (!(field in body)) continue
+    const v = body[field]
+    if (typeof v !== 'string') {
+      res.status(400).json({ error: `${field} must be a string` }); return
+    }
+    if (v !== '') {
+      try {
+        const parsed = new URL(v)
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error()
+      } catch {
+        res.status(400).json({ error: `${field}: must be empty or a valid http(s) URL` }); return
+      }
+    }
+    update[field] = v
+  }
+
+  if (Object.keys(update).length === 0) {
+    res.status(400).json({ error: 'No recognised fields to update' }); return
+  }
+
+  try {
+    const db = admin.firestore()
+    const ref = db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('config').doc('main')
+
+    await ref.set(update, { merge: true })
+
+    // Re-read the whole doc so the response reflects the authoritative current
+    // state of every watched field — the caller's section only sent a subset.
+    const snap = await ref.get()
+    const cd = (snap.data() ?? {}) as Record<string, unknown>
+    res.json({
+      ok: true,
+      reservation_price_chris: typeof cd.reservation_price_chris === 'number'
+        ? (cd.reservation_price_chris as number)
+        : RESERVATION_PRICE_DEFAULTS.reservation_price_chris,
+      reservation_price_kelly: typeof cd.reservation_price_kelly === 'number'
+        ? (cd.reservation_price_kelly as number)
+        : RESERVATION_PRICE_DEFAULTS.reservation_price_kelly,
+      public_info_url: typeof cd.public_info_url === 'string' ? (cd.public_info_url as string) : '',
+      chris_info_url:  typeof cd.chris_info_url  === 'string' ? (cd.chris_info_url  as string) : '',
+      kelly_info_url:  typeof cd.kelly_info_url  === 'string' ? (cd.kelly_info_url  as string) : '',
+    })
+  } catch (err) {
+    console.error('updateGameConfig error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
