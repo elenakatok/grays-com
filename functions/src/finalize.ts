@@ -63,7 +63,17 @@ export function computeZScores(
 
     const surpluses = group.map(surplusOf)
     const mean = surpluses.reduce((a, b) => a + b, 0) / surpluses.length
-    const variance = surpluses.reduce((a, b) => a + (b - mean) ** 2, 0) / surpluses.length
+
+    // Sample standard deviation (÷ N−1), not population (÷ N) — deliberate:
+    // each class is a sample of the population of possible negotiators, not
+    // a closed population itself, matching standard statistical convention
+    // (and Excel's STDEV). Do not "correct" this back to ÷N.
+    if (surpluses.length < 2) {
+      // N−1 would be ≤ 0 — a single data point has no meaningful spread.
+      // That participant is exactly at their own mean, so z = 0.
+      return new Map(group.map((p) => [p.participant_id, 0]))
+    }
+    const variance = surpluses.reduce((a, b) => a + (b - mean) ** 2, 0) / (surpluses.length - 1)
     const stddev = Math.sqrt(variance)
 
     if (stddev === 0) {
