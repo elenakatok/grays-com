@@ -11,6 +11,7 @@ import {
   markParticipantLate,
   finalizeInstance,
   pushResultsToClassroom,
+  syncRoster,
   CLASSROOM_URL,
   isAuthError,
   type InstructorCallArgs,
@@ -188,6 +189,9 @@ export default function InstructorDashboard() {
 
   useEffect(() => {
     if (!callArgs) return
+    // Fire-and-forget: pre-populate roster from classroom enrollment on launch.
+    // Errors are non-fatal — the roster still shows self-joined students without it.
+    syncRoster(callArgs).catch(() => {/* ignore — roster works without pre-pop */})
     getGroupStatuses(callArgs)
       .then((r) => setGroupStatuses(r.groups.length > 0 ? r.groups : null))
       .catch((err: unknown) => {

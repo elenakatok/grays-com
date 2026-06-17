@@ -42,7 +42,38 @@ type Participant = {
   hasAttendance: boolean
 }
 
+type InstanceSummary = {
+  id: string
+  title: string | null
+  participantCount: number
+}
+
 // ── Emulator helpers ──────────────────────────────────────────────────────────
+
+async function listGameInstances(): Promise<InstanceSummary[]> {
+  const base = `${FS_EMULATOR}/v1/projects/${PROJECT_ID}/databases/(default)/documents`
+  const res = await fetch(`${base}/game_instances?pageSize=50`, {
+    headers: { Authorization: 'Bearer owner' },
+  })
+  if (!res.ok) return []
+  const data = await res.json() as {
+    documents?: Array<{ name: string; fields: Record<string, { stringValue?: string }> }>
+  }
+  const docs = data.documents ?? []
+  return Promise.all(
+    docs.map(async (doc) => {
+      const id = doc.name.split('/').pop() ?? ''
+      const title = doc.fields.title?.stringValue ?? null
+      const pRes = await fetch(`${base}/game_instances/${id}/participants?pageSize=500`, {
+        headers: { Authorization: 'Bearer owner' },
+      })
+      const participantCount = pRes.ok
+        ? ((await pRes.json() as { documents?: unknown[] }).documents ?? []).length
+        : 0
+      return { id, title, participantCount }
+    })
+  )
+}
 
 function fsParticipantBase(instanceId: string): string {
   return `${FS_EMULATOR}/v1/projects/${PROJECT_ID}/databases/(default)/documents/game_instances/${instanceId}/participants`
@@ -242,6 +273,10 @@ export default function DevLauncher() {
   const [seedBusy, setSeedBusy] = useState(false)
   const [seedError, setSeedError] = useState<string | null>(null)
 
+  // ── Instance picker state ─────────────────────────────────────────
+  const [instances, setInstances] = useState<InstanceSummary[] | null>(null)
+  const [instancesLoading, setInstancesLoading] = useState(false)
+
   // All hooks above — early return for production is after them
   if (!import.meta.env.DEV) {
     return (
@@ -280,7 +315,7 @@ export default function DevLauncher() {
         const pid = f.participant_id?.stringValue ?? d.name.split('/').pop() ?? '?'
         return {
           id: pid,
-          displayName: f.display_name?.stringValue ?? '(unnamed)',
+          displayName: f.display_name?.stringValue ?? f.name?.stringValue ?? '(unnamed)',
           role:        f.role?.stringValue ?? '?',
           prepStatus:  f.prep_status?.stringValue ?? '?',
           hasGroupId:  Boolean(f.group_id?.stringValue),
@@ -300,6 +335,26 @@ export default function DevLauncher() {
   useEffect(() => {
     void loadParticipants(instanceId)
   }, [instanceId, loadParticipants])
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const loadInstances = useCallback(async () => {
+    setInstancesLoading(true)
+    try {
+      setInstances(await listGameInstances())
+    } catch {
+      setInstances([])
+    } finally {
+      setInstancesLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void loadInstances() }, [loadInstances])
+
+  const selectInstance = (id: string) => {
+    localStorage.setItem(STORAGE_KEY, id)
+    setInstanceId(id)
+    setInputId(id)
+  }
 
   // ── Concern A: simulation ─────────────────────────────────────────
 
@@ -431,6 +486,7 @@ export default function DevLauncher() {
   }
 
   const openDashboard = () => {
+    if (import.meta.env.DEV) console.log('[DevLauncher] game_instance_id:', instanceId)
     window.open(
       `/dashboard?_dev_game_instance_id=${encodeURIComponent(instanceId)}`,
       '_blank',
@@ -485,6 +541,73 @@ export default function DevLauncher() {
         <p style={{ margin: '0.3rem 0 0', fontSize: '0.8rem', color: '#777' }}>
           Active: <code style={{ background: '#f5f5f5', padding: '0 3px' }}>{instanceId}</code>
         </p>
+
+        {/* Instance picker */}
+        <div style={{ marginTop: '0.75rem' }}>
+          <div style={{
+            display: 'flex', justifyContent: 'space-between',
+            alignItems: 'center', marginBottom: '0.3rem',
+          }}>
+            <span style={{ fontSize: '0.8rem', color: '#555', fontWeight: 500 }}>
+              Existing instances
+            </span>
+            <button
+              onClick={() => void loadInstances()}
+              disabled={instancesLoading}
+              style={{ fontSize: '0.75rem', padding: '0.15rem 0.45rem' }}
+            >
+              {instancesLoading ? '…' : '↻'}
+            </button>
+          </div>
+          {instances === null && (
+            <p style={{ fontSize: '0.8rem', color: '#999', margin: 0 }}>Loading…</p>
+          )}
+          {instances !== null && instances.length === 0 && (
+            <p style={{ fontSize: '0.8rem', color: '#999', margin: 0 }}>
+              No instances in emulator yet.
+            </p>
+          )}
+          {instances !== null && instances.length > 0 && (
+            <ul style={{
+              listStyle: 'none', padding: 0, margin: 0,
+              border: '1px solid #e0e0e0', borderRadius: 4, overflow: 'hidden',
+            }}>
+              {instances.map((inst, i) => {
+                const isActive = inst.id === instanceId
+                const label = inst.id.length > 20
+                  ? inst.id.slice(0, 8) + '…' + inst.id.slice(-4)
+                  : inst.id
+                return (
+                  <li
+                    key={inst.id}
+                    onClick={() => selectInstance(inst.id)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '0.5rem',
+                      padding: '0.35rem 0.6rem',
+                      background: isActive ? '#eff6ff' : i % 2 === 0 ? '#fff' : '#fafafa',
+                      borderBottom: i < instances.length - 1 ? '1px solid #eee' : 'none',
+                      borderLeft: `3px solid ${isActive ? '#3b82f6' : 'transparent'}`,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <code style={{ fontSize: '0.75rem', color: '#444', flexShrink: 0 }}>
+                      {label}
+                    </code>
+                    {inst.title && (
+                      <span style={{ fontSize: '0.8rem', fontWeight: 500 }}>{inst.title}</span>
+                    )}
+                    <span style={{
+                      fontSize: '0.75rem', color: '#888',
+                      marginLeft: 'auto', whiteSpace: 'nowrap',
+                    }}>
+                      {inst.participantCount}p
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </div>
       </section>
 
       {/* ── A: Role-balance stress test ──────────────────────────────── */}

@@ -257,6 +257,12 @@ export const updateGameConfig = (
 export const getStudentPrepQuestions = (args: CallArgs) =>
   callFunction<{ ok: boolean; questions: PrepTextQuestion[] }>('getStudentPrepQuestions', args)
 
+// ── Roster pre-population ─────────────────────────────────────────────────────
+
+/** Pre-populates participant docs from classroom enrollment. Fire-and-forget on instructor launch. */
+export const syncRoster = (args: InstructorCallArgs) =>
+  callFunction<{ ok: boolean; synced: number; skipped: number }>('syncRoster', args)
+
 // ── Late-participant helpers ───────────────────────────────────────────────────
 
 export type LateGroupSuggestion = {
