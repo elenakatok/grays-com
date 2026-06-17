@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   getGameConfig, updateGameConfig,
-  type InstructorDevArgs, type PrepTextQuestion, type MCOption,
+  CLASSROOM_URL, isAuthError,
+  type InstructorCallArgs, type PrepTextQuestion, type MCOption,
 } from '../api'
 import { parsePrice } from '../utils/parsePrice'
 
@@ -68,12 +69,29 @@ function ChevronIcon({ open }: { open: boolean }) {
 export default function Settings() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const gameInstanceId = import.meta.env.DEV
+
+  const devGameInstanceId = import.meta.env.DEV
     ? searchParams.get('_dev_game_instance_id')
     : null
+  const tokenParam          = searchParams.get('token')
+  const gameInstanceIdParam = searchParams.get('game_instance_id')
+
+  const callArgs = useMemo<InstructorCallArgs | null>(() => {
+    if (devGameInstanceId) return { _dev: { game_instance_id: devGameInstanceId } }
+    if (tokenParam) return { token: tokenParam }
+    return null
+  }, [devGameInstanceId, tokenParam])
+
+  const makeLink = (base: string): string => {
+    if (devGameInstanceId) return `${base}?_dev_game_instance_id=${encodeURIComponent(devGameInstanceId)}`
+    if (tokenParam && gameInstanceIdParam)
+      return `${base}?token=${encodeURIComponent(tokenParam)}&game_instance_id=${encodeURIComponent(gameInstanceIdParam)}`
+    return base
+  }
 
   // ── Config load ───────────────────────────────────────────────────
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [authError, setAuthError] = useState<string | null>(null)
   const [loading, setLoading]     = useState(false)
 
   // ── Reservation-price state ───────────────────────────────────────
@@ -114,11 +132,10 @@ export default function Settings() {
 
   // ── Load config on mount ──────────────────────────────────────────
   useEffect(() => {
-    if (!gameInstanceId) return
+    if (!callArgs) return
     setLoading(true)
     setLoadError(null)
-    const args: InstructorDevArgs = { _dev: { game_instance_id: gameInstanceId } }
-    getGameConfig(args)
+    getGameConfig(callArgs)
       .then((cfg) => {
         setChrisRaw(String(cfg.reservation_price_chris))
         setKellyRaw(String(cfg.reservation_price_kelly))
@@ -134,10 +151,14 @@ export default function Settings() {
         setLoading(false)
       })
       .catch((err: unknown) => {
-        setLoadError(err instanceof Error ? err.message : 'Failed to load config.')
+        if (isAuthError(err)) {
+          setAuthError(err instanceof Error ? err.message : 'Authentication failed.')
+        } else {
+          setLoadError(err instanceof Error ? err.message : 'Failed to load config.')
+        }
         setLoading(false)
       })
-  }, [gameInstanceId])
+  }, [callArgs])
 
   // ── Shared helper — apply full config result ──────────────────────
   const applyConfigResult = (cfg: Awaited<ReturnType<typeof getGameConfig>>) => {
@@ -182,12 +203,11 @@ export default function Settings() {
   }
 
   const doSavePrices = (chris: number, kelly: number) => {
-    if (!gameInstanceId) return
+    if (!callArgs) return
     setSaving(true); setSaveError(null)
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
     setSavedAt(null)
-    const args: InstructorDevArgs = { _dev: { game_instance_id: gameInstanceId } }
-    updateGameConfig(args, { reservation_price_chris: chris, reservation_price_kelly: kelly })
+    updateGameConfig(callArgs, { reservation_price_chris: chris, reservation_price_kelly: kelly })
       .then(cfg => { setSaving(false); applyConfigResult(cfg); setSavedAt(new Date()) })
       .catch((err: unknown) => { setSaving(false); setSaveError(err instanceof Error ? err.message : 'Save failed — please try again.') })
   }
@@ -200,12 +220,11 @@ export default function Settings() {
     if (pe)  { setUrlSaveError(`Public info URL: ${pe}`);  return }
     if (ce)  { setUrlSaveError(`Chris info URL: ${ce}`);   return }
     if (ke)  { setUrlSaveError(`Kelly info URL: ${ke}`);   return }
-    if (!gameInstanceId) return
+    if (!callArgs) return
     setUrlSaving(true)
     if (urlSavedTimerRef.current) clearTimeout(urlSavedTimerRef.current)
     setUrlSavedAt(null)
-    const args: InstructorDevArgs = { _dev: { game_instance_id: gameInstanceId } }
-    updateGameConfig(args, { public_info_url: publicUrl.trim(), chris_info_url: chrisUrl.trim(), kelly_info_url: kellyUrl.trim() })
+    updateGameConfig(callArgs, { public_info_url: publicUrl.trim(), chris_info_url: chrisUrl.trim(), kelly_info_url: kellyUrl.trim() })
       .then(cfg => { setUrlSaving(false); applyConfigResult(cfg); setUrlSavedAt(new Date()) })
       .catch((err: unknown) => { setUrlSaving(false); setUrlSaveError(err instanceof Error ? err.message : 'Save failed — please try again.') })
   }
@@ -278,12 +297,11 @@ export default function Settings() {
       setPrepSaveError(`Question ${emptyPrompt + 1} has no prompt text — fill it in or hide it.`)
       return
     }
-    if (!gameInstanceId) return
+    if (!callArgs) return
     setPrepSaving(true)
     setPrepSavedAt(null)
-    const args: InstructorDevArgs = { _dev: { game_instance_id: gameInstanceId } }
     const normalised = normaliseOrders(prepQuestions)
-    updateGameConfig(args, { prep_text_questions: normalised })
+    updateGameConfig(callArgs, { prep_text_questions: normalised })
       .then(cfg => {
         setPrepSaving(false)
         const saved = [...cfg.prep_text_questions].sort((a, b) => a.order - b.order)
@@ -298,9 +316,7 @@ export default function Settings() {
 
   // ── Shared styles ─────────────────────────────────────────────────
 
-  const dashLink = gameInstanceId
-    ? `/dashboard?_dev_game_instance_id=${gameInstanceId}`
-    : '/dashboard'
+  const dashLink = makeLink('/dashboard')
 
   const fieldLabel: React.CSSProperties = {
     display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#374151', marginBottom: '0.3rem',
@@ -342,12 +358,31 @@ export default function Settings() {
     padding: '1.25rem 1rem', borderTop: '1px solid #e2e8f0',
   }
 
-  const disabled    = saving    || !gameInstanceId
-  const urlDisabled = urlSaving || !gameInstanceId
-  const prepDisabled = prepSaving || !gameInstanceId
+  const disabled    = saving    || !callArgs
+  const urlDisabled = urlSaving || !callArgs
+  const prepDisabled = prepSaving || !callArgs
 
   // ── Render ────────────────────────────────────────────────────────
 
+  if (authError) {
+    return (
+      <main style={{ padding: '2rem', maxWidth: '800px', margin: '0 auto', fontFamily: 'sans-serif' }}>
+        <div style={{
+          background: '#fef2f2',
+          border: '1px solid #fca5a5',
+          borderRadius: 6,
+          padding: '1.25rem 1.5rem',
+          color: '#7f1d1d',
+        }}>
+          <p style={{ margin: '0 0 0.75rem' }}>
+            This launch link is invalid or has expired. Launch links are only valid for a short time.
+            Please return to the classroom and click &ldquo;Launch&rdquo; again to get a new link.
+          </p>
+          <a href={CLASSROOM_URL} style={{ color: '#b91c1c', fontWeight: 600 }}>Return to classroom</a>
+        </div>
+      </main>
+    )
+  }
   return (
     <div style={{ fontFamily: 'sans-serif', minHeight: '100vh', background: '#f8fafc' }}>
 
@@ -364,7 +399,7 @@ export default function Settings() {
       {/* ── Main ───────────────────────────────────────────────── */}
       <main style={{ maxWidth: 760, margin: '0 auto', padding: '2rem' }}>
 
-        {!gameInstanceId && <p style={{ color: '#94a3b8' }}>Navigate here from the Dashboard to configure this game instance.</p>}
+        {!callArgs && <p style={{ color: '#c00' }}>No valid launch token. Open this page from the classroom or dashboard.</p>}
         {loading && <p style={{ color: '#64748b' }}>Loading…</p>}
         {loadError && <p style={{ color: '#dc2626' }}>{loadError}</p>}
 

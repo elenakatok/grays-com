@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { getReportData, type ReportGroup, type ReportConfig, type ReportParticipant, type InstructorDevArgs } from '../api'
+import { getReportData, CLASSROOM_URL, isAuthError, type ReportGroup, type ReportConfig, type ReportParticipant, type InstructorCallArgs } from '../api'
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
@@ -1097,13 +1097,32 @@ const DEBRIEF_REFLECTION_HEADER =
 export default function Reports() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const gameInstanceId = import.meta.env.DEV ? searchParams.get('_dev_game_instance_id') : null
+
+  const devGameInstanceId = import.meta.env.DEV
+    ? searchParams.get('_dev_game_instance_id')
+    : null
+  const tokenParam          = searchParams.get('token')
+  const gameInstanceIdParam = searchParams.get('game_instance_id')
+
+  const callArgs = useMemo<InstructorCallArgs | null>(() => {
+    if (devGameInstanceId) return { _dev: { game_instance_id: devGameInstanceId } }
+    if (tokenParam) return { token: tokenParam }
+    return null
+  }, [devGameInstanceId, tokenParam])
+
+  const makeLink = (base: string): string => {
+    if (devGameInstanceId) return `${base}?_dev_game_instance_id=${encodeURIComponent(devGameInstanceId)}`
+    if (tokenParam && gameInstanceIdParam)
+      return `${base}?token=${encodeURIComponent(tokenParam)}&game_instance_id=${encodeURIComponent(gameInstanceIdParam)}`
+    return base
+  }
 
   const [groups, setGroups] = useState<ReportGroup[] | null>(null)
   const [config, setConfig] = useState<ReportConfig | null>(null)
   const [participants, setParticipants] = useState<ReportParticipant[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [authError, setAuthError] = useState<string | null>(null)
 
   const histogramSvgRef  = useRef<SVGSVGElement>(null)
   const scatterSvgRef    = useRef<SVGSVGElement>(null)
@@ -1111,22 +1130,25 @@ export default function Reports() {
   const prepEstSvgRef    = useRef<SVGSVGElement>(null)
 
   useEffect(() => {
-    if (!gameInstanceId) return
+    if (!callArgs) return
     setLoading(true)
     setError(null)
-    const args: InstructorDevArgs = { _dev: { game_instance_id: gameInstanceId } }
-    getReportData(args)
+    getReportData(callArgs)
       .then(r => {
         setGroups(r.groups)
         setConfig(r.config)
         setParticipants(r.participants)
         setLoading(false)
       })
-      .catch(err => {
-        setError(err instanceof Error ? err.message : 'Failed to load report data.')
+      .catch((err: unknown) => {
+        if (isAuthError(err)) {
+          setAuthError(err instanceof Error ? err.message : 'Authentication failed.')
+        } else {
+          setError(err instanceof Error ? err.message : 'Failed to load report data.')
+        }
         setLoading(false)
       })
-  }, [gameInstanceId])
+  }, [callArgs])
 
   const projectHistogram = () => {
     if (!histogramSvgRef.current) return
@@ -1194,9 +1216,7 @@ export default function Reports() {
   const projectPrepOffer = () => projectDualPrep(prepOfferSvgRef, 'prep-offer-projection', 'Planned First Offer')
   const projectPrepEst   = () => projectDualPrep(prepEstSvgRef,   'prep-est-projection',   "Estimated Other's Reservation Price")
 
-  const dashLink = gameInstanceId
-    ? `/dashboard?_dev_game_instance_id=${gameInstanceId}`
-    : '/dashboard'
+  const dashLink = makeLink('/dashboard')
 
   const sectionLabel: React.CSSProperties = {
     fontSize: '0.75rem',
@@ -1207,6 +1227,25 @@ export default function Reports() {
     margin: '0 0 0.875rem',
   }
 
+  if (authError) {
+    return (
+      <main style={{ padding: '2rem', maxWidth: '800px', margin: '0 auto', fontFamily: 'sans-serif' }}>
+        <div style={{
+          background: '#fef2f2',
+          border: '1px solid #fca5a5',
+          borderRadius: 6,
+          padding: '1.25rem 1.5rem',
+          color: '#7f1d1d',
+        }}>
+          <p style={{ margin: '0 0 0.75rem' }}>
+            This launch link is invalid or has expired. Launch links are only valid for a short time.
+            Please return to the classroom and click &ldquo;Launch&rdquo; again to get a new link.
+          </p>
+          <a href={CLASSROOM_URL} style={{ color: '#b91c1c', fontWeight: 600 }}>Return to classroom</a>
+        </div>
+      </main>
+    )
+  }
   return (
     <div style={{ fontFamily: 'sans-serif', minHeight: '100vh', background: '#f8fafc' }}>
 
@@ -1236,8 +1275,8 @@ export default function Reports() {
       {/* ── Main ──────────────────────────────────────────────────── */}
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '2rem' }}>
 
-        {!gameInstanceId && (
-          <p style={{ color: '#94a3b8' }}>Navigate here from the Dashboard to see report data.</p>
+        {!callArgs && (
+          <p style={{ color: '#c00' }}>No valid launch token. Open this page from the classroom or dashboard.</p>
         )}
         {loading && <p style={{ color: '#64748b' }}>Loading…</p>}
         {error && <p style={{ color: '#dc2626' }}>{error}</p>}

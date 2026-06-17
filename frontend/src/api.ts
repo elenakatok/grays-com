@@ -8,8 +8,22 @@ const FUNCTIONS_BASE = import.meta.env.DEV
 export type TestArgs = { _test: { participant_id: string; game_instance_id: string } }
 export type TokenArgs = { token: string }
 export type CallArgs = TokenArgs | TestArgs
-// Instructor-side args (no participant_id) — dev-mode only; production uses a token.
-export type InstructorDevArgs = { _dev: { game_instance_id: string } }
+// Instructor-side args: dev shortcut or production JWT token.
+export type InstructorDevArgs   = { _dev: { game_instance_id: string } }
+export type InstructorTokenArgs = { token: string }
+export type InstructorCallArgs  = InstructorTokenArgs | InstructorDevArgs
+
+// Classroom app URL — used in "Return to classroom" links on auth error panels.
+// Update the dev URL if your classroom Vite instance runs on a different port.
+export const CLASSROOM_URL = import.meta.env.DEV
+  ? 'http://localhost:5173'
+  : 'https://classroom.mygames.live'
+
+export function isAuthError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const msg = err.message
+  return msg.includes('(401)') || msg.includes('(403)')
+}
 
 async function callFunction<T>(name: string, body: object): Promise<T> {
   const res = await fetch(`${FUNCTIONS_BASE}/${name}`, {
@@ -19,7 +33,7 @@ async function callFunction<T>(name: string, body: object): Promise<T> {
   })
   const data = (await res.json()) as T & { error?: string }
   if (!res.ok) {
-    throw new Error(data.error ?? `${name} failed (${res.status})`)
+    throw new Error(`${data.error ?? name + ' failed'} (${res.status})`)
   }
   return data
 }
@@ -62,7 +76,7 @@ export const completePrep = (args: CallArgs) =>
 export const confirmReady = (args: CallArgs) =>
   callFunction<{ ok: boolean }>('confirmReady', args)
 
-export const generateAttendanceCode = (args: InstructorDevArgs) =>
+export const generateAttendanceCode = (args: InstructorCallArgs) =>
   callFunction<{ ok: boolean; code: string }>('generateAttendanceCode', args)
 
 export const verifyAttendanceCode = (args: CallArgs, code: string) =>
@@ -77,7 +91,7 @@ export type MatchGroupResult = {
   status: string
 }
 
-export const triggerMatching = (args: InstructorDevArgs) =>
+export const triggerMatching = (args: InstructorCallArgs) =>
   callFunction<{ ok: boolean; groups: MatchGroupResult[]; alreadyMatched?: boolean }>(
     'triggerMatching',
     args,
@@ -117,7 +131,7 @@ export const submitDebriefOffer = (args: CallArgs, initialOffer: number) =>
 
 /** Instructor manually settles a deadlocked group. */
 export const submitInstructorOutcome = (
-  args: InstructorDevArgs,
+  args: InstructorCallArgs,
   groupId: string,
   price: number | null,
 ) =>
@@ -128,7 +142,7 @@ export const submitInstructorOutcome = (
   })
 
 /** Returns all groups with current status — for the instructor dashboard. */
-export const getGroupStatuses = (args: InstructorDevArgs) =>
+export const getGroupStatuses = (args: InstructorCallArgs) =>
   callFunction<{ ok: boolean; groups: GroupStatusResult[] }>('getGroupStatuses', args)
 
 export type RosterParticipant = {
@@ -147,7 +161,7 @@ export type RosterGroup = {
 }
 
 /** Returns all enrolled participants + group statuses for the instructor roster. */
-export const getRoster = (args: InstructorDevArgs) =>
+export const getRoster = (args: InstructorCallArgs) =>
   callFunction<{ ok: boolean; participants: RosterParticipant[]; groups: RosterGroup[]; session_live: boolean }>(
     'getRoster',
     args,
@@ -207,7 +221,7 @@ export type ReportParticipant = {
 }
 
 /** Returns group outcomes, game config, and per-participant prep answers for the Reports page. */
-export const getReportData = (args: InstructorDevArgs) =>
+export const getReportData = (args: InstructorCallArgs) =>
   callFunction<{ ok: boolean; groups: ReportGroup[]; config: ReportConfig; participants: ReportParticipant[] }>('getReportData', args)
 
 // ── Settings page — game config ────────────────────────────────────────────
@@ -223,7 +237,7 @@ export type GameConfigResult = {
 }
 
 /** Reads the full game config from config/main for the Settings page. */
-export const getGameConfig = (args: InstructorDevArgs) =>
+export const getGameConfig = (args: InstructorCallArgs) =>
   callFunction<GameConfigResult>('getGameConfig', args)
 
 /**
@@ -232,7 +246,7 @@ export const getGameConfig = (args: InstructorDevArgs) =>
  * The response is the full current config after the write.
  */
 export const updateGameConfig = (
-  args: InstructorDevArgs,
+  args: InstructorCallArgs,
   fields: Partial<Omit<GameConfigResult, 'ok'>>,
 ) =>
   callFunction<GameConfigResult>('updateGameConfig', { ...args, ...fields })
@@ -260,16 +274,16 @@ export type UnmatchedParticipant = {
 }
 
 /** Returns present, attendance-verified participants who are not yet in any group. */
-export const getUnmatchedParticipants = (args: InstructorDevArgs) =>
+export const getUnmatchedParticipants = (args: InstructorCallArgs) =>
   callFunction<{ ok: boolean; unmatched: UnmatchedParticipant[] }>('getUnmatchedParticipants', args)
 
 /** Marks a present-but-unplaceable participant as "Late" (raw_score/normalized_score = null). */
-export const markParticipantLate = (args: InstructorDevArgs, participantId: string) =>
+export const markParticipantLate = (args: InstructorCallArgs, participantId: string) =>
   callFunction<{ ok: boolean }>('markParticipantLate', { ...args, participant_id: participantId })
 
 /** Adds a late participant to a specific group (server re-checks eligibility). */
 export const addLateParticipant = (
-  args: InstructorDevArgs,
+  args: InstructorCallArgs,
   participantId: string,
   groupId: string,
 ) =>

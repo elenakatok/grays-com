@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
 import { ref, onValue } from 'firebase/database'
 import {
@@ -11,7 +11,9 @@ import {
   markParticipantLate,
   finalizeInstance,
   pushResultsToClassroom,
-  type InstructorDevArgs,
+  CLASSROOM_URL,
+  isAuthError,
+  type InstructorCallArgs,
   type GroupStatusResult,
   type UnmatchedParticipant,
 } from '../api'
@@ -71,21 +73,42 @@ export default function InstructorDashboard() {
   const devGameInstanceId = import.meta.env.DEV
     ? searchParams.get('_dev_game_instance_id')
     : null
+  const tokenParam          = searchParams.get('token')
+  const gameInstanceIdParam = searchParams.get('game_instance_id')
+
+  // Dev shortcut takes precedence; token path is the production entry.
+  const callArgs = useMemo<InstructorCallArgs | null>(() => {
+    if (devGameInstanceId) return { _dev: { game_instance_id: devGameInstanceId } }
+    if (tokenParam) return { token: tokenParam }
+    return null
+  }, [devGameInstanceId, tokenParam])
+
+  // String ID used for RTDB paths and httpsCallable functions.
+  const gameInstanceId = devGameInstanceId ?? gameInstanceIdParam
+
+  // Builds a nav link that carries the current launch context forward.
+  const makeLink = (base: string): string => {
+    if (devGameInstanceId) return `${base}?_dev_game_instance_id=${encodeURIComponent(devGameInstanceId)}`
+    if (tokenParam && gameInstanceIdParam)
+      return `${base}?token=${encodeURIComponent(tokenParam)}&game_instance_id=${encodeURIComponent(gameInstanceIdParam)}`
+    return base
+  }
 
   // ── Attendance code ──────────────────────────────────────────────
+  const [authError, setAuthError] = useState<string | null>(null)
+
   const [code, setCode] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [codeError, setCodeError] = useState<string | null>(null)
 
   const handleGenerate = () => {
-    if (!devGameInstanceId) {
-      setCodeError('No game instance ID.')
+    if (!callArgs) {
+      setCodeError('No valid launch token.')
       return
     }
     setGenerating(true)
     setCodeError(null)
-    const args: InstructorDevArgs = { _dev: { game_instance_id: devGameInstanceId } }
-    generateAttendanceCode(args)
+    generateAttendanceCode(callArgs)
       .then((result) => { setCode(result.code); setGenerating(false) })
       .catch((err: unknown) => {
         setCodeError(err instanceof Error ? err.message : 'Failed to generate code.')
@@ -125,9 +148,9 @@ export default function InstructorDashboard() {
   const [presence, setPresence] = useState<Record<string, PresenceEntry>>({})
 
   useEffect(() => {
-    if (!devGameInstanceId) return
-    const attendingRef = ref(rtdb, `attending/${devGameInstanceId}`)
-    const presenceRef = ref(rtdb, `presence/${devGameInstanceId}`)
+    if (!gameInstanceId) return
+    const attendingRef = ref(rtdb, `attending/${gameInstanceId}`)
+    const presenceRef = ref(rtdb, `presence/${gameInstanceId}`)
     const unsubA = onValue(attendingRef, (snap) => {
       setAttending((snap.val() as Record<string, AttendingEntry>) ?? {})
     })
@@ -135,19 +158,18 @@ export default function InstructorDashboard() {
       setPresence((snap.val() as Record<string, PresenceEntry>) ?? {})
     })
     return () => { unsubA(); unsubP() }
-  }, [devGameInstanceId])
+  }, [gameInstanceId])
 
   // ── Matching ─────────────────────────────────────────────────────
   const [matching, setMatching] = useState(false)
   const [matchError, setMatchError] = useState<string | null>(null)
 
   const handleMatch = () => {
-    if (!devGameInstanceId) return
+    if (!callArgs) return
     setMatching(true)
     setMatchError(null)
-    const args: InstructorDevArgs = { _dev: { game_instance_id: devGameInstanceId } }
-    triggerMatching(args)
-      .then(() => { setMatching(false); loadGroupStatuses(devGameInstanceId) })
+    triggerMatching(callArgs)
+      .then(() => { setMatching(false); loadGroupStatuses(callArgs) })
       .catch((err: unknown) => {
         setMatchError(err instanceof Error ? err.message : 'Matching failed.')
         setMatching(false)
@@ -158,17 +180,20 @@ export default function InstructorDashboard() {
   const [groupStatuses, setGroupStatuses] = useState<GroupStatusResult[] | null>(null)
   const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const loadGroupStatuses = (instanceId: string) => {
-    const args: InstructorDevArgs = { _dev: { game_instance_id: instanceId } }
+  const loadGroupStatuses = (args: InstructorCallArgs) => {
     getGroupStatuses(args)
       .then((r) => setGroupStatuses(r.groups.length > 0 ? r.groups : null))
       .catch(() => {/* silently ignore */})
   }
 
   useEffect(() => {
-    if (!devGameInstanceId) return
-    loadGroupStatuses(devGameInstanceId)
-  }, [devGameInstanceId])
+    if (!callArgs) return
+    getGroupStatuses(callArgs)
+      .then((r) => setGroupStatuses(r.groups.length > 0 ? r.groups : null))
+      .catch((err: unknown) => {
+        if (isAuthError(err)) setAuthError(err instanceof Error ? err.message : 'Authentication failed.')
+      })
+  }, [callArgs])
 
   // ── Latecomers ────────────────────────────────────────────────────
   const [unmatchedParticipants, setUnmatchedParticipants] = useState<UnmatchedParticipant[] | null>(null)
@@ -177,23 +202,21 @@ export default function InstructorDashboard() {
   // Ref tracks in-flight markParticipantLate calls to prevent duplicate auto-marks.
   const markingLateRef = useRef<Record<string, boolean>>({})
 
-  const loadUnmatched = (instanceId: string) => {
-    const args: InstructorDevArgs = { _dev: { game_instance_id: instanceId } }
+  const loadUnmatched = (args: InstructorCallArgs) => {
     getUnmatchedParticipants(args)
       .then((r) => setUnmatchedParticipants(r.unmatched))
       .catch(() => {/* silently ignore */})
   }
 
   const handleAddLatecomer = (participantId: string, groupId: string) => {
-    if (!devGameInstanceId) return
+    if (!callArgs) return
     setAddingLatecomer((prev) => ({ ...prev, [participantId]: true }))
     setLateAddError((prev) => ({ ...prev, [participantId]: '' }))
-    const args: InstructorDevArgs = { _dev: { game_instance_id: devGameInstanceId } }
-    addLateParticipant(args, participantId, groupId)
+    addLateParticipant(callArgs, participantId, groupId)
       .then(() => {
         setAddingLatecomer((prev) => ({ ...prev, [participantId]: false }))
-        loadGroupStatuses(devGameInstanceId)
-        loadUnmatched(devGameInstanceId)
+        loadGroupStatuses(callArgs)
+        loadUnmatched(callArgs)
       })
       .catch((err: unknown) => {
         setLateAddError((prev) => ({
@@ -207,39 +230,38 @@ export default function InstructorDashboard() {
   // Auto-refresh every 8s while any group hasn't completed.
   // Also refreshes the unmatched list on the same cadence when matching has run.
   useEffect(() => {
-    if (!devGameInstanceId || !groupStatuses) return
+    if (!callArgs || !groupStatuses) return
     const needsRefresh = groupStatuses.some((g) => g.status !== 'completed')
     if (needsRefresh) {
       refreshIntervalRef.current = setInterval(() => {
-        loadGroupStatuses(devGameInstanceId)
-        loadUnmatched(devGameInstanceId)
+        loadGroupStatuses(callArgs)
+        loadUnmatched(callArgs)
       }, 8_000)
     }
     return () => { if (refreshIntervalRef.current) clearInterval(refreshIntervalRef.current) }
-  }, [devGameInstanceId, groupStatuses])
+  }, [callArgs, groupStatuses])
 
   // Initial latecomer load once matching has run (groupStatuses non-empty = matched).
   useEffect(() => {
-    if (!devGameInstanceId || !groupStatuses || groupStatuses.length === 0) return
-    loadUnmatched(devGameInstanceId)
-  }, [devGameInstanceId, groupStatuses])
+    if (!callArgs || !groupStatuses || groupStatuses.length === 0) return
+    loadUnmatched(callArgs)
+  }, [callArgs, groupStatuses])
 
   // Auto-mark participants as Late when no group can accept them.
   useEffect(() => {
-    if (!devGameInstanceId || !unmatchedParticipants) return
+    if (!callArgs || !unmatchedParticipants) return
     for (const p of unmatchedParticipants) {
       if (p.suggested_group === null && !markingLateRef.current[p.participant_id]) {
         markingLateRef.current[p.participant_id] = true
-        const args: InstructorDevArgs = { _dev: { game_instance_id: devGameInstanceId } }
-        markParticipantLate(args, p.participant_id)
+        markParticipantLate(callArgs, p.participant_id)
           .then(() => {
             delete markingLateRef.current[p.participant_id]
-            loadUnmatched(devGameInstanceId)
+            loadUnmatched(callArgs)
           })
           .catch(() => { delete markingLateRef.current[p.participant_id] })
       }
     }
-  }, [unmatchedParticipants, devGameInstanceId])
+  }, [unmatchedParticipants, callArgs])
 
   // ── Deadlock resolution ───────────────────────────────────────────
   const [deadlockInputs, setDeadlockInputs] = useState<Record<string, string>>({})
@@ -248,14 +270,13 @@ export default function InstructorDashboard() {
   const [deadlockErrors, setDeadlockErrors] = useState<Record<string, string>>({})
 
   const submitOutcome = (groupId: string, price: number | null) => {
-    if (!devGameInstanceId) return
+    if (!callArgs) return
     setDeadlockSubmitting((prev) => ({ ...prev, [groupId]: true }))
     setDeadlockErrors((prev) => ({ ...prev, [groupId]: '' }))
-    const args: InstructorDevArgs = { _dev: { game_instance_id: devGameInstanceId } }
-    submitInstructorOutcome(args, groupId, price)
+    submitInstructorOutcome(callArgs, groupId, price)
       .then(() => {
         setDeadlockSubmitting((prev) => ({ ...prev, [groupId]: false }))
-        loadGroupStatuses(devGameInstanceId)
+        loadGroupStatuses(callArgs)
       })
       .catch((err: unknown) => {
         setDeadlockErrors((prev) => ({
@@ -285,10 +306,10 @@ export default function InstructorDashboard() {
   const [finalizePhase, setFinalizePhase] = useState<FinalizePhase>({ phase: 'idle' })
 
   const handlePushOnly = async () => {
-    if (!devGameInstanceId) return
+    if (!gameInstanceId) return
     setFinalizePhase({ phase: 'pushing' })
     try {
-      const result = await pushResultsToClassroom(devGameInstanceId)
+      const result = await pushResultsToClassroom(gameInstanceId)
       if (result.failed.length === 0) {
         setFinalizePhase({ phase: 'success', total: result.total })
       } else {
@@ -304,10 +325,10 @@ export default function InstructorDashboard() {
   }
 
   const handleFinalize = async () => {
-    if (!devGameInstanceId) return
+    if (!gameInstanceId) return
     setFinalizePhase({ phase: 'finalizing' })
     try {
-      await finalizeInstance(devGameInstanceId)
+      await finalizeInstance(gameInstanceId)
     } catch (err) {
       setFinalizePhase({
         phase: 'error',
@@ -327,7 +348,7 @@ export default function InstructorDashboard() {
     ([pid, info]) => info.role === 'Kelly' && presenceStatus(presence[pid]) !== 'disconnected',
   ).length
   const alreadyMatched = groupStatuses != null && groupStatuses.length > 0
-  const canMatch = !!devGameInstanceId && !alreadyMatched && activeChrisCount >= 1 && activeKellyCount >= 1
+  const canMatch = !!callArgs && !alreadyMatched && activeChrisCount >= 1 && activeKellyCount >= 1
 
   // Sort by group_id for stable numbering (same order as RosterTable uses).
   const sortedGroupStatuses = [...(groupStatuses ?? [])].sort((a, b) => a.group_id.localeCompare(b.group_id))
@@ -343,7 +364,8 @@ export default function InstructorDashboard() {
   const finalizeDisabled =
     finalizeRunning ||
     finalizePhase.phase === 'success' ||
-    !devGameInstanceId ||
+    !callArgs ||
+    !gameInstanceId ||
     (finalizePhase.phase === 'idle' &&
       (!alreadyMatched || guardResult.blocked || placeableLatecomers.length > 0))
 
@@ -361,6 +383,25 @@ export default function InstructorDashboard() {
     'Finalize'
 
   // ── Render ────────────────────────────────────────────────────────
+  if (authError) {
+    return (
+      <main style={{ padding: '2rem', maxWidth: '800px', margin: '0 auto', fontFamily: 'sans-serif' }}>
+        <div style={{
+          background: '#fef2f2',
+          border: '1px solid #fca5a5',
+          borderRadius: 6,
+          padding: '1.25rem 1.5rem',
+          color: '#7f1d1d',
+        }}>
+          <p style={{ margin: '0 0 0.75rem' }}>
+            This launch link is invalid or has expired. Launch links are only valid for a short time.
+            Please return to the classroom and click &ldquo;Launch&rdquo; again to get a new link.
+          </p>
+          <a href={CLASSROOM_URL} style={{ color: '#b91c1c', fontWeight: 600 }}>Return to classroom</a>
+        </div>
+      </main>
+    )
+  }
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
 
@@ -415,7 +456,7 @@ export default function InstructorDashboard() {
             ) : (
               <button
                 onClick={handleGenerate}
-                disabled={generating || !devGameInstanceId}
+                disabled={generating || !callArgs}
               >
                 {generating ? 'Generating…' : 'Generate Code'}
               </button>
@@ -454,12 +495,12 @@ export default function InstructorDashboard() {
           <div style={{ width: 1, alignSelf: 'stretch', background: '#ddd', margin: '0 0.25rem' }} />
 
           {/* Reports */}
-          <button onClick={() => navigate(devGameInstanceId ? `/reports?_dev_game_instance_id=${devGameInstanceId}` : '/reports')}>
+          <button onClick={() => navigate(makeLink('/reports'))}>
             Reports →
           </button>
 
           {/* Settings */}
-          <button onClick={() => navigate(devGameInstanceId ? `/settings?_dev_game_instance_id=${devGameInstanceId}` : '/settings')}>
+          <button onClick={() => navigate(makeLink('/settings'))}>
             Settings →
           </button>
 
@@ -515,7 +556,7 @@ export default function InstructorDashboard() {
                           {lateAddError[p.participant_id]}
                           {lateAddError[p.participant_id].includes('re-suggest') && (
                             <button
-                              onClick={() => devGameInstanceId && loadUnmatched(devGameInstanceId)}
+                              onClick={() => callArgs && loadUnmatched(callArgs)}
                               style={{ marginLeft: '0.5rem', fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}
                             >
                               Refresh suggestions
@@ -629,15 +670,16 @@ export default function InstructorDashboard() {
         )}
 
         {/* ── Roster table ────────────────────────────────────────── */}
-        {devGameInstanceId ? (
+        {callArgs ? (
           <RosterTable
-            gameInstanceId={devGameInstanceId}
+            callArgs={callArgs}
             stickyHeaderTop={ACTION_BAR_HEIGHT}
             groupOutcomes={sortedGroupStatuses}
+            onAuthError={setAuthError}
           />
         ) : (
-          <p style={{ color: '#888' }}>
-            No game instance ID — add ?_dev_game_instance_id= to the URL.
+          <p style={{ color: '#c00' }}>
+            No valid launch token. Open this page from the classroom.
           </p>
         )}
       </main>
