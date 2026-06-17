@@ -1337,6 +1337,7 @@ export default function Reports() {
                 Headers match the live prompt text; adding/editing/hiding a question
                 in the Settings editor is immediately reflected here on next open. */}
             {(config?.prep_text_questions ?? [])
+              .filter(q => q.type === 'text')
               .slice()
               .sort((a, b) => a.order - b.order)
               .map((q, i) => (

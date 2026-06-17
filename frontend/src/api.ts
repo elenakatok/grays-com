@@ -155,17 +155,22 @@ export const getRoster = (args: InstructorDevArgs) =>
 
 // ── Shared question type ──────────────────────────────────────────────────────
 
+export type MCOption = { value: string; label: string }
+
 /**
- * A single instructor-configurable free-text prep question.
+ * A single prep question — text, numeric, or multiple-choice.
  * Mirrors the backend PrepTextQuestion type in functions/src/index.ts.
  */
 export type PrepTextQuestion = {
   field: string
+  type: 'text' | 'number' | 'mc'
+  system: boolean
   prompt: string
   placeholder: string
   order: number
   hidden: boolean
   deletable: boolean
+  options?: MCOption[]
 }
 
 // ── Reports ───────────────────────────────────────────────────────────────────

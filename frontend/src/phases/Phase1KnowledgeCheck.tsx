@@ -1,21 +1,68 @@
-import { useState } from 'react'
-import { type CallArgs, submitKnowledgeCheck } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { type CallArgs, submitKnowledgeCheck, getStudentPrepQuestions } from '../api'
+
+type KnowledgeCheckOption = { value: 'Chris' | 'Kelly'; label: string }
+
+const DEFAULT_OPTIONS: KnowledgeCheckOption[] = [
+  { value: 'Chris', label: 'Chris Gray, the seller' },
+  { value: 'Kelly', label: 'Kelly Kaplan, the buyer' },
+]
+const DEFAULT_PROMPT = 'What is your role in the negotiation?'
 
 type Props = {
   callArgs: CallArgs
   onComplete: () => void
 }
 
-const OPTIONS: Array<{ value: 'Chris' | 'Kelly'; label: string }> = [
-  { value: 'Chris', label: 'Chris Gray, the seller' },
-  { value: 'Kelly', label: 'Kelly Kaplan, the buyer' },
-]
-
 export default function Phase1KnowledgeCheck({ callArgs, onComplete }: Props) {
+  const [prompt, setPrompt]     = useState(DEFAULT_PROMPT)
+  const [options, setOptions]   = useState<KnowledgeCheckOption[]>(DEFAULT_OPTIONS)
+  const [configStatus, setConfigStatus] = useState<'loading' | 'ready'>('loading')
+
   const [selected, setSelected] = useState<'Chris' | 'Kelly' | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [wrongAnswer, setWrongAnswer] = useState(false)
   const [serverError, setServerError] = useState<string | null>(null)
+
+  const onCompleteRef = useRef(onComplete)
+  onCompleteRef.current = onComplete
+
+  useEffect(() => {
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        const result = await getStudentPrepQuestions(callArgs)
+        if (cancelled) return
+
+        const mcQ = result.questions.find(q => q.type === 'mc')
+        if (!mcQ) {
+          // MC question is hidden — skip this phase entirely.
+          onCompleteRef.current()
+          return
+        }
+
+        if (mcQ.prompt) setPrompt(mcQ.prompt)
+
+        if (mcQ.options && mcQ.options.length > 0) {
+          const mapped: KnowledgeCheckOption[] = []
+          for (const o of mcQ.options) {
+            if (o.value === 'Chris' || o.value === 'Kelly') {
+              mapped.push({ value: o.value, label: o.label })
+            }
+          }
+          if (mapped.length > 0) setOptions(mapped)
+        }
+      } catch {
+        // Config fetch failed — use defaults, still show the question.
+      }
+
+      if (!cancelled) setConfigStatus('ready')
+    }
+
+    void load()
+    return () => { cancelled = true }
+  }, [callArgs])
 
   const handleSubmit = async () => {
     if (!selected || submitting) return
@@ -26,7 +73,7 @@ export default function Phase1KnowledgeCheck({ callArgs, onComplete }: Props) {
     try {
       const result = await submitKnowledgeCheck(callArgs, selected)
       if (result.correct) {
-        onComplete()
+        onCompleteRef.current()
       } else {
         setWrongAnswer(true)
         setSubmitting(false)
@@ -37,15 +84,23 @@ export default function Phase1KnowledgeCheck({ callArgs, onComplete }: Props) {
     }
   }
 
+  if (configStatus === 'loading') {
+    return (
+      <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto' }}>
+        <p>Loading…</p>
+      </main>
+    )
+  }
+
   return (
     <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto', fontFamily: 'sans-serif' }}>
       <p style={{ color: '#555', marginBottom: '0.25rem' }}>Knowledge check</p>
       <h1 style={{ marginTop: 0, marginBottom: '1.75rem' }}>
-        What is your role in the negotiation?
+        {prompt}
       </h1>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        {OPTIONS.map(({ value, label }) => {
+        {options.map(({ value, label }) => {
           const isSelected = selected === value
           return (
             <label

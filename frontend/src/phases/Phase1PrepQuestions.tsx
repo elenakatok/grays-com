@@ -4,78 +4,38 @@ import { db } from '../firebase'
 import { type CallArgs, type PrepTextQuestion, getStudentPrepQuestions } from '../api'
 import { parsePrice } from '../utils/parsePrice'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Defaults (fallback if config fetch fails) ──────────────────────────────────
+// Mirrors SYSTEM_QUESTION_DEFAULTS + DEFAULT_PREP_TEXT_QUESTIONS in functions/src/index.ts.
 
-type QuestionType = 'text' | 'number'
-
-/** Combined type for the merged question list (text from config + numeric hardcoded). */
-type MergedQuestion = {
-  field: string
-  type: QuestionType
-  prompt: string
-  placeholder: string
-  /** Global sort key. Text questions get even values (0, 2, 4 …);
-   *  hardcoded numeric questions sit at odd values (1, 3) between them. */
-  order: number
-}
-
-// ── Hardcoded numeric questions ───────────────────────────────────────────────
-// These are NOT stored in config and are NOT editable by the instructor (Slice 1
-// scope). They interleave with text questions via the `order` field: order 1
-// (after text@0) and order 3 (after text@2).
-
-const NUMERIC_QUESTIONS: MergedQuestion[] = [
+const DEFAULT_QUESTIONS: PrepTextQuestion[] = [
   {
-    field:       'prep_estimated_other_price',
-    type:        'number',
-    prompt:      "What is your best guess of the other side's walk-away value (reservation price)?",
-    placeholder: 'e.g. 250000',
-    order:       1,
+    field: 'prep_first_topic', type: 'text', system: false,
+    prompt: 'When you sit down to talk, what is the first topic you will bring up with the other side?',
+    placeholder: '', order: 0, hidden: false, deletable: true,
   },
   {
-    field:       'prep_planned_first_offer',
-    type:        'number',
-    prompt:      'Assuming you make the first offer, what number do you think you will put on the table? This is non-binding.',
-    placeholder: 'e.g. 300000',
-    order:       3,
+    field: 'prep_estimated_other_price', type: 'number', system: true,
+    prompt: "What is your best guess of the other side's walk-away value (reservation price)?",
+    placeholder: 'e.g. 250000', order: 1, hidden: false, deletable: false,
+  },
+  {
+    field: 'prep_question_for_other', type: 'text', system: false,
+    prompt: 'What question would you most like to ask the other side? Why?',
+    placeholder: '', order: 2, hidden: false, deletable: true,
+  },
+  {
+    field: 'prep_planned_first_offer', type: 'number', system: true,
+    prompt: 'Assuming you make the first offer, what number do you think you will put on the table? This is non-binding.',
+    placeholder: 'e.g. 300000', order: 3, hidden: false, deletable: false,
+  },
+  {
+    field: 'prep_planned_offer_reason', type: 'text', system: false,
+    prompt: 'What is the reason for the number you gave?',
+    placeholder: '', order: 4, hidden: false, deletable: true,
   },
 ]
 
-// ── Defaults (fallback while config loads or if field is absent) ──────────────
-
-const DEFAULT_TEXT_QUESTIONS: MergedQuestion[] = [
-  {
-    field:       'prep_first_topic',
-    type:        'text',
-    prompt:      'When you sit down to talk, what is the first topic you will bring up with the other side?',
-    placeholder: '',
-    order:       0,
-  },
-  {
-    field:       'prep_question_for_other',
-    type:        'text',
-    prompt:      'What question would you most like to ask the other side? Why?',
-    placeholder: '',
-    order:       2,
-  },
-  {
-    field:       'prep_planned_offer_reason',
-    type:        'text',
-    prompt:      'What is the reason for the number you gave?',
-    placeholder: '',
-    order:       4,
-  },
-]
-
-function toMerged(q: PrepTextQuestion): MergedQuestion {
-  return { field: q.field, type: 'text', prompt: q.prompt, placeholder: q.placeholder, order: q.order }
-}
-
-function buildList(textQuestions: MergedQuestion[]): MergedQuestion[] {
-  return [...textQuestions, ...NUMERIC_QUESTIONS].sort((a, b) => a.order - b.order)
-}
-
-// ── Component ─────────────────────────────────────────────────────────────────
+// ── Component ──────────────────────────────────────────────────────────────────
 
 const fmtPrice = new Intl.NumberFormat('en-US', {
   style: 'currency', currency: 'USD', maximumFractionDigits: 0,
@@ -102,11 +62,9 @@ export default function Phase1PrepQuestions({
   const [saveError, setSaveError]             = useState<string | null>(null)
   const [pendingConfirm, setPendingConfirm]   = useState<number | null>(null)
 
-  // The effective question list — starts as defaults and switches to config-driven
-  // values once the fetch resolves.  If the fetch fails we stay on defaults.
-  const [questions, setQuestions] = useState<MergedQuestion[]>(buildList(DEFAULT_TEXT_QUESTIONS))
+  // text+number questions from config (MC handled by Phase1KnowledgeCheck)
+  const [questions, setQuestions] = useState<PrepTextQuestion[]>(DEFAULT_QUESTIONS)
 
-  // Stable ref so the load effect doesn't re-run when onComplete identity changes.
   const onCompleteRef = useRef(onComplete)
   onCompleteRef.current = onComplete
 
@@ -114,19 +72,21 @@ export default function Phase1PrepQuestions({
     let cancelled = false
 
     const load = async () => {
-      // ── 1. Fetch stored prep-text questions from config ─────────────────────
-      let textQs: MergedQuestion[] = DEFAULT_TEXT_QUESTIONS
+      // ── 1. Fetch all visible questions from config ──────────────────────────
+      let qs: PrepTextQuestion[] = DEFAULT_QUESTIONS
       try {
         const result = await getStudentPrepQuestions(callArgs)
         if (!cancelled && result.questions.length > 0) {
-          textQs = result.questions.map(toMerged)
+          // Exclude MC questions — those are handled by Phase1KnowledgeCheck.
+          qs = result.questions
+            .filter(q => q.type !== 'mc')
+            .sort((a, b) => a.order - b.order)
         }
       } catch {
         // Config fetch failed — stay on defaults; student flow continues.
       }
 
-      const effectiveQuestions = buildList(textQs)
-      if (!cancelled) setQuestions(effectiveQuestions)
+      if (!cancelled) setQuestions(qs)
 
       // ── 2. Read participant doc for already-answered fields ─────────────────
       try {
@@ -136,11 +96,11 @@ export default function Phase1PrepQuestions({
         const data = snap.data() ?? {}
 
         const existing: Record<string, string> = {}
-        for (const q of effectiveQuestions) {
+        for (const q of qs) {
           if (data[q.field] != null) existing[q.field] = String(data[q.field])
         }
 
-        const firstUnanswered = effectiveQuestions.findIndex(
+        const firstUnanswered = qs.findIndex(
           q => existing[q.field] == null || existing[q.field] === '',
         )
         if (firstUnanswered === -1) {
@@ -168,12 +128,15 @@ export default function Phase1PrepQuestions({
     )
   }
 
+  // All non-MC questions hidden — onComplete already called in load(), but guard the render.
+  if (questions.length === 0) return null
+
   const question = questions[step]
   const currentValue = answers[question.field] ?? ''
   const isLast = step === questions.length - 1
   const displayLabel = `Question ${step + 1} of ${questions.length}`
 
-  // ── Handlers ────────────────────────────────────────────────────────────────
+  // ── Handlers ──────────────────────────────────────────────────────────────
 
   const persistAnswer = async (valueToStore: string | number) => {
     setSaveError(null)
@@ -235,7 +198,7 @@ export default function Phase1PrepQuestions({
     setPendingConfirm(null)
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto', fontFamily: 'sans-serif' }}>

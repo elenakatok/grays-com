@@ -1892,58 +1892,95 @@ const RESERVATION_PRICE_DEFAULTS = {
   reservation_price_kelly: 475_000,  // Kelly's ceiling: 1% of $47.5M ticket sales
 } as const
 
-// ── Free-text prep questions ────────────────────────────────────────────────
+// ── Prep questions (text, numeric, multiple-choice) ─────────────────────────
 
-/** A single instructor-configurable free-text prep question. */
+export type MCOption = { value: string; label: string }
+
+/** A single prep question — free-text, numeric, or multiple-choice. */
 export type PrepTextQuestion = {
-  /** Participant doc field name the answer writes to (must start with prep_). */
+  /** Participant doc field name (must start with prep_) or 'knowledge_check' for the MC role-check. */
   field: string
+  /** Input type: 'text' textarea, 'number' dollar input, 'mc' radio buttons. Default: 'text'. */
+  type: 'text' | 'number' | 'mc'
+  /** True for system-defined questions (knowledge check + numeric). Instructor cannot delete or change field/type/deletable. */
+  system: boolean
   /** The question prompt shown to students. */
   prompt: string
-  /** Textarea placeholder hint. */
+  /** Textarea/input placeholder hint. */
   placeholder: string
-  /** Sort key in the merged question list. Even values (0, 2, 4 …) leave
-   *  room for the hardcoded numeric questions at positions 1 and 3. */
+  /** Global sort key across all question types. */
   order: number
   /** When true the question is skipped in the student flow. */
   hidden: boolean
-  /** True for all instructor-created questions; false for system questions
-   *  (reserved for Slice 2 non-deletable enforcement). */
+  /** False for system questions — no delete action is ever shown. */
   deletable: boolean
+  /** MC options (value = grading key, label = display text). Only present for type 'mc'. */
+  options?: MCOption[]
 }
 
-/**
- * Default free-text prep questions — mirrors the hardcoded QUESTIONS array in
- * Phase1PrepQuestions.tsx. Used as the fallback when prep_text_questions is
- * absent from config/main (i.e., before the instructor has opened Settings).
- * Order values 0, 2, 4 interleave with hardcoded numeric questions at 1, 3.
- */
+/** Default text-only prep questions for instances that have never opened Settings. */
 const DEFAULT_PREP_TEXT_QUESTIONS: PrepTextQuestion[] = [
   {
     field: 'prep_first_topic',
+    type: 'text', system: false,
     prompt: 'When you sit down to talk, what is the first topic you will bring up with the other side?',
-    placeholder: '',
-    order: 0,
-    hidden: false,
-    deletable: true,
+    placeholder: '', order: 0, hidden: false, deletable: true,
   },
   {
     field: 'prep_question_for_other',
+    type: 'text', system: false,
     prompt: 'What question would you most like to ask the other side? Why?',
-    placeholder: '',
-    order: 2,
-    hidden: false,
-    deletable: true,
+    placeholder: '', order: 2, hidden: false, deletable: true,
   },
   {
     field: 'prep_planned_offer_reason',
+    type: 'text', system: false,
     prompt: 'What is the reason for the number you gave?',
-    placeholder: '',
-    order: 4,
-    hidden: false,
-    deletable: true,
+    placeholder: '', order: 4, hidden: false, deletable: true,
   },
 ]
+
+/**
+ * System question defaults — injected for any instance whose stored
+ * prep_text_questions does not yet include them (first load after Slice 2 deploy).
+ * Instructors can edit prompt/hidden/order and (for MC) option labels, but not
+ * field/type/deletable/system or MC option values.
+ */
+const SYSTEM_QUESTION_DEFAULTS: PrepTextQuestion[] = [
+  {
+    field: 'knowledge_check',
+    type: 'mc', system: true, deletable: false,
+    prompt: 'What is your role in the negotiation?',
+    placeholder: '', order: -1, hidden: false,
+    options: [
+      { value: 'Chris', label: 'Chris Gray, the seller' },
+      { value: 'Kelly', label: 'Kelly Kaplan, the buyer' },
+    ],
+  },
+  {
+    field: 'prep_estimated_other_price',
+    type: 'number', system: true, deletable: false,
+    prompt: "What is your best guess of the other side's walk-away value (reservation price)?",
+    placeholder: 'e.g. 250000', order: 1, hidden: false,
+  },
+  {
+    field: 'prep_planned_first_offer',
+    type: 'number', system: true, deletable: false,
+    prompt: 'Assuming you make the first offer, what number do you think you will put on the table? This is non-binding.',
+    placeholder: 'e.g. 300000', order: 3, hidden: false,
+  },
+]
+
+/** Injects any missing system questions (by field name) into the stored list and sorts by order. */
+function mergeWithSystemDefaults(stored: PrepTextQuestion[]): PrepTextQuestion[] {
+  const result = [...stored]
+  for (const def of SYSTEM_QUESTION_DEFAULTS) {
+    if (!result.some(q => q.field === def.field)) {
+      result.push({ ...def })
+    }
+  }
+  return result.sort((a, b) => a.order - b.order)
+}
 
 function parsePrepTextQuestions(raw: unknown): PrepTextQuestion[] | null {
   if (!Array.isArray(raw)) return null
@@ -1951,20 +1988,42 @@ function parsePrepTextQuestions(raw: unknown): PrepTextQuestion[] | null {
   for (const item of raw) {
     if (typeof item !== 'object' || item === null) return null
     const q = item as Record<string, unknown>
-    if (typeof q.field        !== 'string'  || !q.field.startsWith('prep_')) return null
-    if (typeof q.prompt       !== 'string')                                   return null
-    if (typeof q.placeholder  !== 'string')                                   return null
-    if (typeof q.order        !== 'number'  || !Number.isFinite(q.order))     return null
-    if (typeof q.hidden       !== 'boolean')                                   return null
-    if (typeof q.deletable    !== 'boolean')                                   return null
-    result.push({
+    if (typeof q.field !== 'string') return null
+    if (!q.field.startsWith('prep_') && q.field !== 'knowledge_check') return null
+    if (typeof q.prompt      !== 'string')                              return null
+    if (typeof q.placeholder !== 'string')                              return null
+    if (typeof q.order       !== 'number' || !Number.isFinite(q.order)) return null
+    if (typeof q.hidden      !== 'boolean')                             return null
+    if (typeof q.deletable   !== 'boolean')                             return null
+
+    const type: 'text' | 'number' | 'mc' =
+      q.type === 'number' ? 'number' : q.type === 'mc' ? 'mc' : 'text'
+    const system: boolean = q.system === true
+
+    let options: MCOption[] | undefined
+    if (type === 'mc') {
+      if (!Array.isArray(q.options)) return null
+      options = []
+      for (const opt of q.options) {
+        if (typeof opt !== 'object' || opt === null) return null
+        const o = opt as Record<string, unknown>
+        if (typeof o.value !== 'string' || typeof o.label !== 'string') return null
+        options.push({ value: o.value, label: o.label })
+      }
+    }
+
+    const parsed: PrepTextQuestion = {
       field:       q.field       as string,
+      type,
+      system,
       prompt:      q.prompt      as string,
       placeholder: q.placeholder as string,
       order:       q.order       as number,
       hidden:      q.hidden      as boolean,
       deletable:   q.deletable   as boolean,
-    })
+    }
+    if (options !== undefined) parsed.options = options
+    result.push(parsed)
   }
   // Guard against absurd sizes.
   if (result.length > 50) return null
@@ -2131,7 +2190,9 @@ export const getGameConfig = onRequest(async (req, res) => {
       public_info_url: typeof cd.public_info_url  === 'string' ? (cd.public_info_url  as string) : '',
       chris_info_url:  typeof cd.chris_info_url   === 'string' ? (cd.chris_info_url   as string) : '',
       kelly_info_url:  typeof cd.kelly_info_url   === 'string' ? (cd.kelly_info_url   as string) : '',
-      prep_text_questions: parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS,
+      prep_text_questions: mergeWithSystemDefaults(
+        parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS,
+      ),
     })
   } catch (err) {
     console.error('getGameConfig error:', err)
@@ -2237,7 +2298,9 @@ export const updateGameConfig = onRequest(async (req, res) => {
       public_info_url: typeof cd.public_info_url === 'string' ? (cd.public_info_url as string) : '',
       chris_info_url:  typeof cd.chris_info_url  === 'string' ? (cd.chris_info_url  as string) : '',
       kelly_info_url:  typeof cd.kelly_info_url  === 'string' ? (cd.kelly_info_url  as string) : '',
-      prep_text_questions: parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS,
+      prep_text_questions: mergeWithSystemDefaults(
+        parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS,
+      ),
     })
   } catch (err) {
     console.error('updateGameConfig error:', err)
@@ -2271,8 +2334,8 @@ export const getStudentPrepQuestions = onRequest(async (req, res) => {
       .collection('game_instances').doc(gameInstanceId)
       .collection('config').doc('main').get()
     const cd = (snap.data() ?? {}) as Record<string, unknown>
-    const all = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
-    const visible = all
+    const stored = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
+    const visible = mergeWithSystemDefaults(stored)
       .filter(q => !q.hidden)
       .sort((a, b) => a.order - b.order)
     res.json({ ok: true, questions: visible })
