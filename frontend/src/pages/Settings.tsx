@@ -106,6 +106,17 @@ export default function Settings() {
   const [authError, setAuthError] = useState<string | null>(null)
   const [loading, setLoading]     = useState(false)
 
+  // ── Display-name state ───────────────────────────────────────────
+  const [sellerNameRaw, setSellerNameRaw] = useState('')
+  const [buyerNameRaw,  setBuyerNameRaw]  = useState('')
+  const [savedSellerName, setSavedSellerName] = useState<string | null>(null)
+  const [savedBuyerName,  setSavedBuyerName]  = useState<string | null>(null)
+  const [namesSaving, setNamesSaving]     = useState(false)
+  const [namesSaveError, setNamesSaveError] = useState<string | null>(null)
+  const [namesSavedAt, setNamesSavedAt]   = useState<Date | null>(null)
+  const namesSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [namesOpen, setNamesOpen] = useState(false)
+
   // ── Reservation-price state ───────────────────────────────────────
   const [chrisRaw, setChrisRaw]     = useState('')
   const [kellyRaw, setKellyRaw]     = useState('')
@@ -149,6 +160,10 @@ export default function Settings() {
     setLoadError(null)
     getGameConfig(callArgs)
       .then((cfg) => {
+        setSellerNameRaw(cfg.seller_name)
+        setBuyerNameRaw(cfg.buyer_name)
+        setSavedSellerName(cfg.seller_name)
+        setSavedBuyerName(cfg.buyer_name)
         setChrisRaw(String(cfg.reservation_price_chris))
         setKellyRaw(String(cfg.reservation_price_kelly))
         setSavedChris(cfg.reservation_price_chris)
@@ -174,6 +189,10 @@ export default function Settings() {
 
   // ── Shared helper — apply full config result ──────────────────────
   const applyConfigResult = (cfg: Awaited<ReturnType<typeof getGameConfig>>) => {
+    setSellerNameRaw(cfg.seller_name)
+    setBuyerNameRaw(cfg.buyer_name)
+    setSavedSellerName(cfg.seller_name)
+    setSavedBuyerName(cfg.buyer_name)
     setChrisRaw(String(cfg.reservation_price_chris))
     setKellyRaw(String(cfg.reservation_price_kelly))
     setSavedChris(cfg.reservation_price_chris)
@@ -192,8 +211,8 @@ export default function Settings() {
   const handleSave = () => {
     setConfirmChris(null); setConfirmKelly(null); setSaveError(null)
     const cr = parsePrice(chrisRaw), kr = parsePrice(kellyRaw)
-    if (cr.kind === 'invalid') { setSaveError('Chris reservation price: enter a valid dollar amount (e.g. 25000 or 25k).'); return }
-    if (kr.kind === 'invalid') { setSaveError('Kelly reservation price: enter a valid dollar amount (e.g. 475000 or 475k).'); return }
+    if (cr.kind === 'invalid') { setSaveError(`${savedSellerName ?? 'Seller'} reservation price: enter a valid dollar amount (e.g. 25000 or 25k).`); return }
+    if (kr.kind === 'invalid') { setSaveError(`${savedBuyerName ?? 'Buyer'} reservation price: enter a valid dollar amount (e.g. 475000 or 475k).`); return }
     if (cr.kind === 'confirm') { setConfirmChris(cr.proposed); return }
     if (kr.kind === 'confirm') { setConfirmKelly(kr.proposed); return }
     doSavePrices(cr.value, kr.value)
@@ -203,14 +222,14 @@ export default function Settings() {
     if (confirmChris == null) return
     const kr = parsePrice(kellyRaw)
     if (kr.kind === 'confirm') { setConfirmChris(null); setConfirmKelly(kr.proposed); return }
-    if (kr.kind === 'invalid') { setConfirmChris(null); setSaveError('Kelly reservation price: enter a valid dollar amount.'); return }
+    if (kr.kind === 'invalid') { setConfirmChris(null); setSaveError(`${savedBuyerName ?? 'Buyer'} reservation price: enter a valid dollar amount.`); return }
     doSavePrices(confirmChris, kr.value); setConfirmChris(null)
   }
 
   const handleConfirmKelly = () => {
     if (confirmKelly == null) return
     const cr = parsePrice(chrisRaw)
-    if (cr.kind === 'invalid') { setConfirmKelly(null); setSaveError('Chris reservation price: enter a valid dollar amount.'); return }
+    if (cr.kind === 'invalid') { setConfirmKelly(null); setSaveError(`${savedSellerName ?? 'Seller'} reservation price: enter a valid dollar amount.`); return }
     doSavePrices(cr.kind === 'confirm' ? cr.proposed : cr.value, confirmKelly); setConfirmKelly(null)
   }
 
@@ -230,8 +249,8 @@ export default function Settings() {
     setUrlSaveError(null)
     const pe = validateUrl(publicUrl), ce = validateUrl(chrisUrl), ke = validateUrl(kellyUrl)
     if (pe)  { setUrlSaveError(`Public info URL: ${pe}`);  return }
-    if (ce)  { setUrlSaveError(`Chris info URL: ${ce}`);   return }
-    if (ke)  { setUrlSaveError(`Kelly info URL: ${ke}`);   return }
+    if (ce)  { setUrlSaveError(`${savedSellerName ?? 'Seller'} info URL: ${ce}`);  return }
+    if (ke)  { setUrlSaveError(`${savedBuyerName  ?? 'Buyer'}  info URL: ${ke}`);  return }
     if (!callArgs) return
     setUrlSaving(true)
     if (urlSavedTimerRef.current) clearTimeout(urlSavedTimerRef.current)
@@ -239,6 +258,23 @@ export default function Settings() {
     updateGameConfig(callArgs, { public_info_url: publicUrl.trim(), chris_info_url: chrisUrl.trim(), kelly_info_url: kellyUrl.trim() })
       .then(cfg => { setUrlSaving(false); applyConfigResult(cfg); setUrlSavedAt(new Date()) })
       .catch((err: unknown) => { setUrlSaving(false); setUrlSaveError(err instanceof Error ? err.message : 'Save failed — please try again.') })
+  }
+
+  // ── Display-name save ─────────────────────────────────────────────
+
+  const handleNamesSave = () => {
+    setNamesSaveError(null)
+    const sn = sellerNameRaw.trim()
+    const bn = buyerNameRaw.trim()
+    if (!sn) { setNamesSaveError('Seller name cannot be blank.'); return }
+    if (!bn) { setNamesSaveError('Buyer name cannot be blank.'); return }
+    if (!callArgs) return
+    setNamesSaving(true)
+    if (namesSavedTimerRef.current) clearTimeout(namesSavedTimerRef.current)
+    setNamesSavedAt(null)
+    updateGameConfig(callArgs, { seller_name: sn, buyer_name: bn })
+      .then(cfg => { setNamesSaving(false); applyConfigResult(cfg); setNamesSavedAt(new Date()) })
+      .catch((err: unknown) => { setNamesSaving(false); setNamesSaveError(err instanceof Error ? err.message : 'Save failed — please try again.') })
   }
 
   // ── Prep-questions CRUD ───────────────────────────────────────────
@@ -422,9 +458,10 @@ export default function Settings() {
     padding: '1.25rem 1rem', borderTop: '1px solid #e2e8f0',
   }
 
-  const disabled    = saving    || !callArgs
-  const urlDisabled = urlSaving || !callArgs
-  const prepDisabled = prepSaving || !callArgs
+  const disabled     = saving       || !callArgs
+  const urlDisabled  = urlSaving    || !callArgs
+  const prepDisabled = prepSaving   || !callArgs
+  const namesDisabled = namesSaving || !callArgs
 
   // ── Render ────────────────────────────────────────────────────────
 
@@ -467,6 +504,60 @@ export default function Settings() {
         {loading && <p style={{ color: '#64748b' }}>Loading…</p>}
         {loadError && <p style={{ color: '#dc2626' }}>{loadError}</p>}
 
+        {/* ── Display Names ──────────────────────────────────── */}
+        <div style={sectionCardStyle(namesOpen)}>
+          <button
+            style={sectionHeaderStyle}
+            onClick={() => setNamesOpen(o => !o)}
+            aria-expanded={namesOpen}
+          >
+            <span style={sectionTitleStyle}>Display Names</span>
+            <ChevronIcon open={namesOpen} />
+          </button>
+
+          {namesOpen && (
+            <div style={sectionBodyStyle}>
+              <div style={{
+                background: '#fffbeb', border: '1px solid #fbbf24', borderRadius: 6,
+                padding: '0.75rem 1rem', marginBottom: '1.25rem',
+                display: 'flex', gap: '0.625rem', alignItems: 'flex-start',
+              }}>
+                <span style={{ fontSize: '1rem', lineHeight: 1, flexShrink: 0, marginTop: 2 }}>⚠️</span>
+                <div style={{ fontSize: '0.825rem', color: '#92400e', lineHeight: 1.5 }}>
+                  <strong>Role PDFs are the source of truth.</strong>
+                  {' '}The role sheets address each participant by name. Changing the seller or buyer
+                  display name here will <em>desync</em> the name students read in their role sheets
+                  from the name shown in the game. If you change these names you must also update the
+                  PDFs, otherwise students will see a different name than the one in their role sheet.
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', maxWidth: 480 }}>
+                <div>
+                  <label style={fieldLabel} htmlFor="name-seller">Seller display name</label>
+                  <input id="name-seller" type="text" value={sellerNameRaw}
+                    onChange={e => { setSellerNameRaw(e.target.value); setNamesSaveError(null) }}
+                    disabled={namesDisabled} placeholder="e.g. Chris" style={inputStyle} />
+                  {savedSellerName != null && <p style={{ margin: '0.25rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>Saved: {savedSellerName}</p>}
+                </div>
+                <div>
+                  <label style={fieldLabel} htmlFor="name-buyer">Buyer display name</label>
+                  <input id="name-buyer" type="text" value={buyerNameRaw}
+                    onChange={e => { setBuyerNameRaw(e.target.value); setNamesSaveError(null) }}
+                    disabled={namesDisabled} placeholder="e.g. Kelly" style={inputStyle} />
+                  {savedBuyerName != null && <p style={{ margin: '0.25rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>Saved: {savedBuyerName}</p>}
+                </div>
+              </div>
+              <div style={saveRowStyle}>
+                <button onClick={handleNamesSave} disabled={namesDisabled} style={saveBtn(namesSaving, namesDisabled)}>
+                  {namesSaving ? 'Saving…' : 'Save'}
+                </button>
+                {namesSavedAt != null && !namesSaving && <span style={{ fontSize: '0.8rem', color: '#16a34a' }}>Saved {namesSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
+                {namesSaveError && <span style={{ fontSize: '0.8rem', color: '#dc2626' }}>{namesSaveError}</span>}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* ── Reservation Prices ─────────────────────────────── */}
         <div style={sectionCardStyle(pricesOpen)}>
           <button
@@ -488,9 +579,8 @@ export default function Settings() {
                 <span style={{ fontSize: '1rem', lineHeight: 1, flexShrink: 0, marginTop: 2 }}>⚠️</span>
                 <div style={{ fontSize: '0.825rem', color: '#92400e', lineHeight: 1.5 }}>
                   <strong>Role PDFs are the source of truth.</strong>
-                  {' '}The standard scenario PDFs specify{' '}
-                  <strong>$25,000</strong> (Chris's floor — cost to switch domains) and{' '}
-                  <strong>$475,000</strong> (Kelly's ceiling — 1% of $47.5M ticket sales).
+                  {' '}The role sheets specify the seller&apos;s floor (their walk-away cost) and
+                  the buyer&apos;s ceiling (their maximum willingness to pay).
                   Overriding these values here will <em>desync</em> the numbers students actually read
                   in their role sheets. If you change these prices you must also update the PDFs, otherwise
                   students will be scored against numbers they were never given.
@@ -500,7 +590,7 @@ export default function Settings() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', maxWidth: 480 }}>
                 {/* Chris price */}
                 <div>
-                  <label style={fieldLabel} htmlFor="price-chris">Chris — reservation price</label>
+                  <label style={fieldLabel} htmlFor="price-chris">{savedSellerName ?? 'Seller'} — reservation price</label>
                   <input id="price-chris" type="text" inputMode="decimal" value={chrisRaw}
                     onChange={e => { setChrisRaw(e.target.value); setConfirmChris(null); setSaveError(null) }}
                     disabled={disabled} placeholder="e.g. 25000" style={inputStyle} />
@@ -518,7 +608,7 @@ export default function Settings() {
 
                 {/* Kelly price */}
                 <div>
-                  <label style={fieldLabel} htmlFor="price-kelly">Kelly — reservation price</label>
+                  <label style={fieldLabel} htmlFor="price-kelly">{savedBuyerName ?? 'Buyer'} — reservation price</label>
                   <input id="price-kelly" type="text" inputMode="decimal" value={kellyRaw}
                     onChange={e => { setKellyRaw(e.target.value); setConfirmKelly(null); setSaveError(null) }}
                     disabled={disabled} placeholder="e.g. 475000" style={inputStyle} />
@@ -575,8 +665,8 @@ export default function Settings() {
                 </div>
                 <div>
                   <label style={fieldLabel} htmlFor="url-chris">
-                    Chris role info
-                    <span style={{ fontWeight: 400, color: '#9ca3af', marginLeft: '0.4rem' }}>— private PDF shown only to Chris participants</span>
+                    {savedSellerName ?? 'Seller'} role info
+                    <span style={{ fontWeight: 400, color: '#9ca3af', marginLeft: '0.4rem' }}>— private PDF shown only to seller participants</span>
                   </label>
                   <input id="url-chris" type="url" value={chrisUrl} onChange={e => { setChrisUrl(e.target.value); setUrlSaveError(null) }}
                     disabled={urlDisabled} placeholder="https://www.dropbox.com/…" style={inputStyle} />
@@ -584,8 +674,8 @@ export default function Settings() {
                 </div>
                 <div>
                   <label style={fieldLabel} htmlFor="url-kelly">
-                    Kelly role info
-                    <span style={{ fontWeight: 400, color: '#9ca3af', marginLeft: '0.4rem' }}>— private PDF shown only to Kelly participants</span>
+                    {savedBuyerName ?? 'Buyer'} role info
+                    <span style={{ fontWeight: 400, color: '#9ca3af', marginLeft: '0.4rem' }}>— private PDF shown only to buyer participants</span>
                   </label>
                   <input id="url-kelly" type="url" value={kellyUrl} onChange={e => { setKellyUrl(e.target.value); setUrlSaveError(null) }}
                     disabled={urlDisabled} placeholder="https://www.dropbox.com/…" style={inputStyle} />

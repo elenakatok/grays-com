@@ -12,6 +12,7 @@ import {
   finalizeInstance,
   pushResultsToClassroom,
   syncRoster,
+  getGameConfig,
   CLASSROOM_URL,
   isAuthError,
   type InstructorCallArgs,
@@ -94,6 +95,10 @@ export default function InstructorDashboard() {
       return `${base}?token=${encodeURIComponent(tokenParam)}&game_instance_id=${encodeURIComponent(gameInstanceIdParam)}`
     return base
   }
+
+  // ── Display names ────────────────────────────────────────────────
+  const [sellerName, setSellerName] = useState('Chris')
+  const [buyerName,  setBuyerName]  = useState('Kelly')
 
   // ── Attendance code ──────────────────────────────────────────────
   const [authError, setAuthError] = useState<string | null>(null)
@@ -192,6 +197,9 @@ export default function InstructorDashboard() {
     // Fire-and-forget: pre-populate roster from classroom enrollment on launch.
     // Errors are non-fatal — the roster still shows self-joined students without it.
     syncRoster(callArgs).catch(() => {/* ignore — roster works without pre-pop */})
+    getGameConfig(callArgs)
+      .then(cfg => { setSellerName(cfg.seller_name); setBuyerName(cfg.buyer_name) })
+      .catch(() => {/* non-fatal — dashboard still works with defaults */})
     getGroupStatuses(callArgs)
       .then((r) => setGroupStatuses(r.groups.length > 0 ? r.groups : null))
       .catch((err: unknown) => {
@@ -598,8 +606,8 @@ export default function InstructorDashboard() {
                   attending[pid]?.display_name ?? pid.slice(0, 8) + '…'
                 const members = [
                   ...g.chris_participants.map((pid) =>
-                    `${nameFn(pid)} (Chris${pid === g.lead_participant_id ? ', lead' : ''})`),
-                  ...g.kelly_participants.map((pid) => `${nameFn(pid)} (Kelly)`),
+                    `${nameFn(pid)} (${sellerName}${pid === g.lead_participant_id ? ', lead' : ''})`),
+                  ...g.kelly_participants.map((pid) => `${nameFn(pid)} (${buyerName})`),
                 ].join(' · ')
                 const pendingConfirm = deadlockConfirms[g.group_id]
 

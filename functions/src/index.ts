@@ -573,11 +573,14 @@ export const triggerMatching = onRequest(async (req, res) => {
     }
 
     // Read presence from RTDB to identify connected students.
-    const presenceSnap = await admin
-      .database()
-      .ref(`presence/${gameInstanceId}`)
-      .once('value')
+    const [presenceSnap, configSnap] = await Promise.all([
+      admin.database().ref(`presence/${gameInstanceId}`).once('value'),
+      instanceRef.collection('config').doc('main').get(),
+    ])
     const presentIds = new Set<string>(Object.keys(presenceSnap.val() ?? {}))
+    const cfgData = (configSnap.data() ?? {}) as Record<string, unknown>
+    const sellerName = typeof cfgData.seller_name === 'string' ? cfgData.seller_name : CONFIG_DEFAULTS.seller_name
+    const buyerName  = typeof cfgData.buyer_name  === 'string' ? cfgData.buyer_name  : CONFIG_DEFAULTS.buyer_name
 
     // Read all participants; filter to attended + present.
     const participantsSnap = await instanceRef.collection('participants').get()
@@ -600,7 +603,7 @@ export const triggerMatching = onRequest(async (req, res) => {
     if (chrisCount === 0 || kellyCount === 0) {
       res
         .status(400)
-        .json({ error: 'Need at least one Chris and one Kelly present to match.' })
+        .json({ error: `Need at least one ${sellerName} and one ${buyerName} present to match.` })
       return
     }
 
@@ -1631,12 +1634,14 @@ export const getReportData = onRequest(async (req, res) => {
       })
       .filter((p) => p.role === 'Chris' || p.role === 'Kelly')
 
-    const cd = configSnap.data() ?? {}
+    const cd = (configSnap.data() ?? {}) as Record<string, unknown>
     const config = {
       reservation_price_chris: typeof cd.reservation_price_chris === 'number'
-        ? (cd.reservation_price_chris as number) : 25_000,
+        ? (cd.reservation_price_chris as number) : CONFIG_DEFAULTS.reservation_price_chris,
       reservation_price_kelly: typeof cd.reservation_price_kelly === 'number'
-        ? (cd.reservation_price_kelly as number) : 475_000,
+        ? (cd.reservation_price_kelly as number) : CONFIG_DEFAULTS.reservation_price_kelly,
+      seller_name: typeof cd.seller_name === 'string' ? (cd.seller_name as string) : CONFIG_DEFAULTS.seller_name,
+      buyer_name:  typeof cd.buyer_name  === 'string' ? (cd.buyer_name  as string) : CONFIG_DEFAULTS.buyer_name,
       prep_text_questions: parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS,
     }
 
@@ -1840,6 +1845,11 @@ export const addLateParticipant = onRequest(async (req, res) => {
     const pRef = instanceRef.collection('participants').doc(participantId)
     const gRef = instanceRef.collection('groups').doc(groupId)
 
+    const cfgSnap = await instanceRef.collection('config').doc('main').get()
+    const cfgData = (cfgSnap.data() ?? {}) as Record<string, unknown>
+    const sellerName = typeof cfgData.seller_name === 'string' ? cfgData.seller_name : CONFIG_DEFAULTS.seller_name
+    const buyerName  = typeof cfgData.buyer_name  === 'string' ? cfgData.buyer_name  : CONFIG_DEFAULTS.buyer_name
+
     let resultComposition = ''
     let alreadyInThisGroup = false
 
@@ -1898,7 +1908,7 @@ export const addLateParticipant = onRequest(async (req, res) => {
       if (role === 'Chris' && chrisIds.length >= 2) {
         throw Object.assign(
           new Error(
-            `Group already has ${chrisIds.length} Chrises. ` +
+            `Group already has ${chrisIds.length} ${sellerName} participants. ` +
             `Please re-suggest a different group.`,
           ),
           { status: 409 },
@@ -1907,7 +1917,7 @@ export const addLateParticipant = onRequest(async (req, res) => {
       if (role === 'Kelly' && kellyIds.length >= 2) {
         throw Object.assign(
           new Error(
-            `Group already has ${kellyIds.length} Kellys. ` +
+            `Group already has ${kellyIds.length} ${buyerName} participants. ` +
             `Please re-suggest a different group.`,
           ),
           { status: 409 },
@@ -1936,12 +1946,14 @@ export const addLateParticipant = onRequest(async (req, res) => {
   }
 })
 
-// ── Reservation-price defaults ─────────────────────────────────────────────
+// ── Config defaults ─────────────────────────────────────────────────────────
 // Single source of truth for both finalizeInstance scoring and the Settings
 // page; must stay in sync with the standard role PDFs shipped with the scenario.
-const RESERVATION_PRICE_DEFAULTS = {
-  reservation_price_chris: 25_000,   // Chris's floor: cost to switch domains
-  reservation_price_kelly: 475_000,  // Kelly's ceiling: 1% of $47.5M ticket sales
+const CONFIG_DEFAULTS = {
+  reservation_price_chris: 25_000,
+  reservation_price_kelly: 475_000,
+  seller_name: 'Chris',
+  buyer_name: 'Kelly',
 } as const
 
 // ── Prep questions (text, numeric, multiple-choice) ─────────────────────────
@@ -2233,7 +2245,7 @@ export const finalizeInstance = onCall(
 
     // Standard reservation-price defaults — match the standard role PDFs.
     // Must stay in sync with the PDFs if an instructor ever overrides them in config.
-    const STANDARD_DEFAULTS = RESERVATION_PRICE_DEFAULTS
+    const STANDARD_DEFAULTS = CONFIG_DEFAULTS
 
     // Three cases for reservation prices:
     //   1. Config document loaded and both fields are present → use them (instructor override).
@@ -2353,10 +2365,12 @@ export const getGameConfig = onRequest(async (req, res) => {
       ok: true,
       reservation_price_chris: typeof cd.reservation_price_chris === 'number'
         ? (cd.reservation_price_chris as number)
-        : RESERVATION_PRICE_DEFAULTS.reservation_price_chris,
+        : CONFIG_DEFAULTS.reservation_price_chris,
       reservation_price_kelly: typeof cd.reservation_price_kelly === 'number'
         ? (cd.reservation_price_kelly as number)
-        : RESERVATION_PRICE_DEFAULTS.reservation_price_kelly,
+        : CONFIG_DEFAULTS.reservation_price_kelly,
+      seller_name: typeof cd.seller_name === 'string' ? (cd.seller_name as string) : CONFIG_DEFAULTS.seller_name,
+      buyer_name:  typeof cd.buyer_name  === 'string' ? (cd.buyer_name  as string) : CONFIG_DEFAULTS.buyer_name,
       public_info_url: typeof cd.public_info_url  === 'string' ? (cd.public_info_url  as string) : '',
       chris_info_url:  typeof cd.chris_info_url   === 'string' ? (cd.chris_info_url   as string) : '',
       kelly_info_url:  typeof cd.kelly_info_url   === 'string' ? (cd.kelly_info_url   as string) : '',
@@ -2432,6 +2446,16 @@ export const updateGameConfig = onRequest(async (req, res) => {
     update[field] = v
   }
 
+  // ── Display names ──────────────────────────────────────────────────
+  for (const field of ['seller_name', 'buyer_name'] as const) {
+    if (!(field in body)) continue
+    const v = body[field]
+    if (typeof v !== 'string' || v.trim() === '') {
+      res.status(400).json({ error: `${field} must be a non-empty string` }); return
+    }
+    update[field] = v.trim()
+  }
+
   // ── prep_text_questions ────────────────────────────────────────────
   if ('prep_text_questions' in body) {
     const parsed = parsePrepTextQuestions(body.prep_text_questions)
@@ -2465,10 +2489,12 @@ export const updateGameConfig = onRequest(async (req, res) => {
       ok: true,
       reservation_price_chris: typeof cd.reservation_price_chris === 'number'
         ? (cd.reservation_price_chris as number)
-        : RESERVATION_PRICE_DEFAULTS.reservation_price_chris,
+        : CONFIG_DEFAULTS.reservation_price_chris,
       reservation_price_kelly: typeof cd.reservation_price_kelly === 'number'
         ? (cd.reservation_price_kelly as number)
-        : RESERVATION_PRICE_DEFAULTS.reservation_price_kelly,
+        : CONFIG_DEFAULTS.reservation_price_kelly,
+      seller_name: typeof cd.seller_name === 'string' ? (cd.seller_name as string) : CONFIG_DEFAULTS.seller_name,
+      buyer_name:  typeof cd.buyer_name  === 'string' ? (cd.buyer_name  as string) : CONFIG_DEFAULTS.buyer_name,
       public_info_url: typeof cd.public_info_url === 'string' ? (cd.public_info_url as string) : '',
       chris_info_url:  typeof cd.chris_info_url  === 'string' ? (cd.chris_info_url  as string) : '',
       kelly_info_url:  typeof cd.kelly_info_url  === 'string' ? (cd.kelly_info_url  as string) : '',
@@ -2508,13 +2534,27 @@ export const getStudentPrepQuestions = onRequest(async (req, res) => {
       .collection('game_instances').doc(gameInstanceId)
       .collection('config').doc('main').get()
     const cd = (snap.data() ?? {}) as Record<string, unknown>
+    const sellerName = typeof cd.seller_name === 'string' ? cd.seller_name : CONFIG_DEFAULTS.seller_name
+    const buyerName  = typeof cd.buyer_name  === 'string' ? cd.buyer_name  : CONFIG_DEFAULTS.buyer_name
     const stored = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
     const visible = mergeWithSystemDefaults(stored)
       .filter(q => !q.hidden && q.category !== 'debrief')
       .sort((a, b) => a.order - b.order)
     // Strip answer key fields — correct_value and grading must never reach the client.
     const sanitized = visible.map(({ correct_value: _cv, grading: _g, ...rest }) => rest)
-    res.json({ ok: true, questions: sanitized })
+    // Override KC role option labels with the configured display names.
+    const withNames = sanitized.map(q => {
+      if (q.field !== 'knowledge_check' || !q.options) return q
+      return {
+        ...q,
+        options: q.options.map(o => {
+          if (o.value === 'Chris') return { ...o, label: `${sellerName}, the seller` }
+          if (o.value === 'Kelly') return { ...o, label: `${buyerName}, the buyer` }
+          return o
+        }),
+      }
+    })
+    res.json({ ok: true, questions: withNames })
   } catch (err) {
     console.error('getStudentPrepQuestions error:', err)
     res.status(500).json({ error: 'Internal error' })

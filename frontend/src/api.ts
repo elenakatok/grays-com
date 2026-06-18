@@ -51,6 +51,8 @@ export type InfoUrlsResult = {
   role: 'Chris' | 'Kelly'
   public_info_url: string
   private_info_url: string
+  seller_name: string
+  buyer_name: string
 }
 
 export type KnowledgeCheckResult = {
@@ -216,6 +218,8 @@ export type ReportGroup = {
 export type ReportConfig = {
   reservation_price_chris: number
   reservation_price_kelly: number
+  seller_name: string
+  buyer_name: string
   prep_text_questions: PrepTextQuestion[]
 }
 
@@ -244,6 +248,8 @@ export type GameConfigResult = {
   ok: boolean
   reservation_price_chris: number
   reservation_price_kelly: number
+  seller_name: string
+  buyer_name: string
   public_info_url: string
   chris_info_url:  string
   kelly_info_url:  string

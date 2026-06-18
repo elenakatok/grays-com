@@ -29,7 +29,7 @@ import Phase2OffPlatformHolding from '../phases/Phase2OffPlatformHolding'
 type GamePhase =
   | { name: 'loading' }
   | { name: 'error'; message: string }
-  | { name: 'info'; role: 'Chris' | 'Kelly'; publicUrl: string; privateUrl: string }
+  | { name: 'info'; role: 'Chris' | 'Kelly'; sellerName: string; buyerName: string; publicUrl: string; privateUrl: string }
   | { name: 'knowledge-check' }
   | { name: 'prep-questions' }
   | { name: 'name-entry' }
@@ -174,10 +174,10 @@ export default function Play() {
           return
         }
 
-        const { public_info_url, private_info_url } = await getInfoUrls(resolvedCallArgs)
+        const { public_info_url, private_info_url, seller_name, buyer_name } = await getInfoUrls(resolvedCallArgs)
 
         if (!cancelled) {
-          setPhase({ name: 'info', role, publicUrl: public_info_url, privateUrl: private_info_url })
+          setPhase({ name: 'info', role, sellerName: seller_name, buyerName: buyer_name, publicUrl: public_info_url, privateUrl: private_info_url })
         }
       } catch (err) {
         if (!cancelled) {
@@ -386,6 +386,8 @@ export default function Play() {
   return (
     <Phase1Info
       role={phase.role}
+      sellerName={phase.sellerName}
+      buyerName={phase.buyerName}
       publicUrl={phase.publicUrl}
       privateUrl={phase.privateUrl}
       onContinue={() => setPhase({ name: 'knowledge-check' })}

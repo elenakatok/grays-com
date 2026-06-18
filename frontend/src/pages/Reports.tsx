@@ -184,23 +184,23 @@ function PriceHistogramSVG({ groups, config, svgRef }: HistSVGProps) {
         )
       })}
 
-      {/* Reference line — Chris's floor */}
+      {/* Reference line — Seller's floor */}
       <line x1={chrisX} y1={M.top} x2={chrisX} y2={baseline}
         stroke="#d97706" strokeWidth={2.5} strokeDasharray="8 5" />
       {/* Label to the right of the line so it doesn't overlap bars on the far left */}
       <text x={chrisX + 7} y={M.top + 18} fontSize={13} fontWeight={600} fill="#d97706" fontFamily="sans-serif">
-        Chris's floor
+        Seller&apos;s floor
       </text>
       <text x={chrisX + 7} y={M.top + 34} fontSize={12} fill="#d97706" fontFamily="sans-serif">
         {USD.format(config.reservation_price_chris)}
       </text>
 
-      {/* Reference line — Kelly's ceiling */}
+      {/* Reference line — Buyer's ceiling */}
       <line x1={kellyX} y1={M.top} x2={kellyX} y2={baseline}
         stroke="#7c3aed" strokeWidth={2.5} strokeDasharray="8 5" />
       {/* Label to the left of the line */}
       <text x={kellyX - 7} y={M.top + 18} textAnchor="end" fontSize={13} fontWeight={600} fill="#7c3aed" fontFamily="sans-serif">
-        Kelly's ceiling
+        Buyer&apos;s ceiling
       </text>
       <text x={kellyX - 7} y={M.top + 34} textAnchor="end" fontSize={12} fill="#7c3aed" fontFamily="sans-serif">
         {USD.format(config.reservation_price_kelly)}
@@ -737,33 +737,33 @@ function DualPrepHistSVG({ participants, config, field, title, svgRef }: DualPre
       {/* ZOPA legend */}
       <g>
         <line x1={DW / 2 - 178} y1={legendY - 4} x2={DW / 2 - 150} y2={legendY - 4} stroke="#d97706" strokeWidth={2.5} strokeDasharray="6 4" />
-        <text x={DW / 2 - 145} y={legendY} fontSize={12} fill="#d97706" fontFamily="sans-serif">Chris's floor ({USD.format(config.reservation_price_chris)})</text>
+        <text x={DW / 2 - 145} y={legendY} fontSize={12} fill="#d97706" fontFamily="sans-serif">{"Seller's floor"} ({USD.format(config.reservation_price_chris)})</text>
         <line x1={DW / 2 + 24} y1={legendY - 4} x2={DW / 2 + 52} y2={legendY - 4} stroke="#7c3aed" strokeWidth={2.5} strokeDasharray="6 4" />
-        <text x={DW / 2 + 57} y={legendY} fontSize={12} fill="#7c3aed" fontFamily="sans-serif">Kelly's ceiling ({USD.format(config.reservation_price_kelly)})</text>
+        <text x={DW / 2 + 57} y={legendY} fontSize={12} fill="#7c3aed" fontFamily="sans-serif">{"Buyer's ceiling"} ({USD.format(config.reservation_price_kelly)})</text>
       </g>
 
       {/* Stats separator */}
       <line x1={D_LP_PX} y1={D_BL + 50} x2={D_LP_PX + D_PPW} y2={D_BL + 50} stroke="#e5e7eb" strokeWidth={1} />
       <line x1={D_RP_PX} y1={D_BL + 50} x2={D_RP_PX + D_PPW} y2={D_BL + 50} stroke="#e5e7eb" strokeWidth={1} />
 
-      {/* Left panel — Chris */}
+      {/* Left panel — Seller */}
       <Panel
         plotX={xPxLeft}
         maxCount={maxCountC}
         panel={d.chris}
-        roleLabel="Chris"
+        roleLabel="Seller"
         roleColor="#0369a1"
         showYLabels={true}
         chrisX={chrisFloorX(xPxLeft)}
         kellyX={kellyCeilX(xPxLeft)}
       />
 
-      {/* Right panel — Kelly */}
+      {/* Right panel — Buyer */}
       <Panel
         plotX={xPxRight}
         maxCount={maxCountK}
         panel={d.kelly}
-        roleLabel="Kelly"
+        roleLabel="Buyer"
         roleColor="#0f766e"
         showYLabels={true}
         chrisX={chrisFloorX(xPxRight)}
@@ -911,8 +911,8 @@ function buildGroupTextExport(
       const chrisNames = g.chris_participants.map(id => byId.get(id)?.display_name).filter((n): n is string => !!n)
       const kellyNames = g.kelly_participants.map(id => byId.get(id)?.display_name).filter((n): n is string => !!n)
       const compositionParts: string[] = []
-      if (chrisNames.length) compositionParts.push(`Chris: ${chrisNames.join(', ')}`)
-      if (kellyNames.length) compositionParts.push(`Kelly: ${kellyNames.join(', ')}`)
+      if (chrisNames.length) compositionParts.push(`Seller: ${chrisNames.join(', ')}`)
+      if (kellyNames.length) compositionParts.push(`Buyer: ${kellyNames.join(', ')}`)
       const priceLabel = g.agreement_reached === true && g.final_price != null
         ? `final price ${USD.format(g.final_price)}`
         : 'No deal'
@@ -926,7 +926,7 @@ function buildGroupTextExport(
         const p = byId.get(m.id)
         const val = p ? (p as Record<string, unknown>)[field] : undefined
         if (p && typeof val === 'string' && val.trim().length > 0) {
-          lines.push(`  ${p.display_name} (${m.role}): ${val.trim()}`)
+          lines.push(`  ${p.display_name} (${m.role === 'Chris' ? 'Seller' : 'Buyer'}): ${val.trim()}`)
           responseCount++
         }
       }

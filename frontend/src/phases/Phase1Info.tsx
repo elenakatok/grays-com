@@ -1,20 +1,21 @@
 type Props = {
   role: 'Chris' | 'Kelly'
+  sellerName: string
+  buyerName: string
   publicUrl: string
   privateUrl: string
   onContinue: () => void
 }
 
-const ROLE_LABEL: Record<'Chris' | 'Kelly', string> = {
-  Chris: 'Chris Gray — Seller',
-  Kelly: 'Kelly Kaplan — Buyer',
-}
-
-export default function Phase1Info({ role, publicUrl, privateUrl, onContinue }: Props) {
+export default function Phase1Info({ role, sellerName, buyerName, publicUrl, privateUrl, onContinue }: Props) {
+  const roleLabel = role === 'Chris'
+    ? `${sellerName} — Seller`
+    : `${buyerName} — Buyer`
+  const roleDisplayName = role === 'Chris' ? sellerName : buyerName
   return (
     <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto', fontFamily: 'sans-serif' }}>
       <p style={{ color: '#555', marginBottom: '0.25rem' }}>Your role</p>
-      <h1 style={{ marginTop: 0 }}>{ROLE_LABEL[role]}</h1>
+      <h1 style={{ marginTop: 0 }}>{roleLabel}</h1>
 
       <section style={{ marginTop: '2rem' }}>
         <h2>Public Information</h2>
@@ -41,7 +42,7 @@ export default function Phase1Info({ role, publicUrl, privateUrl, onContinue }: 
         </p>
         {privateUrl ? (
           <a href={privateUrl} target="_blank" rel="noreferrer">
-            Open {role} Role Information PDF →
+            Open {roleDisplayName} Role Information PDF →
           </a>
         ) : (
           <p style={{ color: '#888' }}>

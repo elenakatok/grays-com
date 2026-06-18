@@ -4,8 +4,8 @@ import { type CallArgs, type MCOption, submitKnowledgeCheck, submitStaticKnowled
 type RoleOption = { value: 'Chris' | 'Kelly'; label: string }
 
 const DEFAULT_ROLE_OPTIONS: RoleOption[] = [
-  { value: 'Chris', label: 'Chris Gray, the seller' },
-  { value: 'Kelly', label: 'Kelly Kaplan, the buyer' },
+  { value: 'Chris', label: 'Seller' },
+  { value: 'Kelly', label: 'Buyer' },
 ]
 const DEFAULT_ROLE_PROMPT = 'What is your role in the negotiation?'
 

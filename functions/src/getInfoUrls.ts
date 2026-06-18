@@ -4,12 +4,16 @@ export type InfoUrlsResult = {
   role: 'Chris' | 'Kelly'
   public_info_url: string
   private_info_url: string
+  seller_name: string
+  buyer_name: string
 }
 
 type GameConfig = {
   public_info_url?: string
   chris_info_url?: string
   kelly_info_url?: string
+  seller_name?: string
+  buyer_name?: string
 }
 
 /**
@@ -60,5 +64,7 @@ export async function getInfoUrlsForParticipant(
     role,
     public_info_url: config.public_info_url ?? '',
     private_info_url: role === 'Chris' ? (config.chris_info_url ?? '') : (config.kelly_info_url ?? ''),
+    seller_name: config.seller_name ?? 'Chris',
+    buyer_name: config.buyer_name ?? 'Kelly',
   }
 }
