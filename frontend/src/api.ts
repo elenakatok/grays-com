@@ -70,6 +70,16 @@ export const getInfoUrls = (args: CallArgs) =>
 export const submitKnowledgeCheck = (args: CallArgs, answer: 'Chris' | 'Kelly') =>
   callFunction<KnowledgeCheckResult>('submitKnowledgeCheck', { ...args, answer })
 
+export type StaticKnowledgeCheckResult = {
+  ok: boolean
+  score: number
+  correctCount: number
+  totalCount: number
+}
+
+export const submitStaticKnowledgeCheck = (args: CallArgs, answers: Record<string, string>) =>
+  callFunction<StaticKnowledgeCheckResult>('submitStaticKnowledgeCheck', { ...args, answers })
+
 export const completePrep = (args: CallArgs) =>
   callFunction<{ ok: boolean }>('completePrep', args)
 
@@ -185,6 +195,10 @@ export type PrepTextQuestion = {
   hidden: boolean
   deletable: boolean
   options?: MCOption[]
+  category: 'knowledge_check' | 'preparation' | 'debrief'
+  format: 'multiple_choice' | 'number' | 'text'
+  grading?: 'static' | 'assigned_role'
+  correct_value?: string
 }
 
 // ── Reports ───────────────────────────────────────────────────────────────────

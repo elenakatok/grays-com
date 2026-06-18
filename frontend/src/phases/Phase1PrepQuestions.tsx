@@ -10,26 +10,31 @@ import { parsePrice } from '../utils/parsePrice'
 const DEFAULT_QUESTIONS: PrepTextQuestion[] = [
   {
     field: 'prep_first_topic', type: 'text', system: false,
+    category: 'preparation', format: 'text',
     prompt: 'When you sit down to talk, what is the first topic you will bring up with the other side?',
     placeholder: '', order: 0, hidden: false, deletable: true,
   },
   {
     field: 'prep_estimated_other_price', type: 'number', system: true,
+    category: 'preparation', format: 'number',
     prompt: "What is your best guess of the other side's walk-away value (reservation price)?",
     placeholder: 'e.g. 250000', order: 1, hidden: false, deletable: false,
   },
   {
     field: 'prep_question_for_other', type: 'text', system: false,
+    category: 'preparation', format: 'text',
     prompt: 'What question would you most like to ask the other side? Why?',
     placeholder: '', order: 2, hidden: false, deletable: true,
   },
   {
     field: 'prep_planned_first_offer', type: 'number', system: true,
+    category: 'preparation', format: 'number',
     prompt: 'Assuming you make the first offer, what number do you think you will put on the table? This is non-binding.',
     placeholder: 'e.g. 300000', order: 3, hidden: false, deletable: false,
   },
   {
     field: 'prep_planned_offer_reason', type: 'text', system: false,
+    category: 'preparation', format: 'text',
     prompt: 'What is the reason for the number you gave?',
     placeholder: '', order: 4, hidden: false, deletable: true,
   },
@@ -62,7 +67,7 @@ export default function Phase1PrepQuestions({
   const [saveError, setSaveError]             = useState<string | null>(null)
   const [pendingConfirm, setPendingConfirm]   = useState<number | null>(null)
 
-  // text+number questions from config (MC handled by Phase1KnowledgeCheck)
+  // Only category=preparation questions (KC and debrief handled elsewhere)
   const [questions, setQuestions] = useState<PrepTextQuestion[]>(DEFAULT_QUESTIONS)
 
   const onCompleteRef = useRef(onComplete)
@@ -77,9 +82,9 @@ export default function Phase1PrepQuestions({
       try {
         const result = await getStudentPrepQuestions(callArgs)
         if (!cancelled && result.questions.length > 0) {
-          // Exclude MC questions — those are handled by Phase1KnowledgeCheck.
+          // Only preparation-category questions — KC and debrief are handled elsewhere.
           qs = result.questions
-            .filter(q => q.type !== 'mc')
+            .filter(q => q.category === 'preparation')
             .sort((a, b) => a.order - b.order)
         }
       } catch {

@@ -10,7 +10,7 @@ import type { GameConfig, ParticipantRecord } from './finalize'
 import { suggestGroupForLatecomer } from './lateParticipant'
 import { assignRole as doAssignRole } from './assignRole'
 import { getInfoUrlsForParticipant } from './getInfoUrls'
-import { scoreKnowledgeCheck } from './submitKnowledgeCheck'
+import { scoreKnowledgeCheck, scoreStaticKnowledgeCheck } from './submitKnowledgeCheck'
 import { markPrepComplete } from './completePrep'
 import { markReadyConfirmed } from './confirmReady'
 import { generateAttendanceCode as doGenerateCode, verifyAttendanceCode as doVerifyCode } from './attendanceCode'
@@ -195,6 +195,58 @@ export const submitKnowledgeCheck = onRequest(async (req, res) => {
 
   try {
     const result = await scoreKnowledgeCheck(gameInstanceId, participantId, answer)
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    const message = err instanceof Error ? err.message : 'Internal error'
+    res.status(status).json({ error: message })
+  }
+})
+
+/**
+ * Grades the static concept knowledge-check questions and writes the final
+ * knowledge_check_score.  Must be called after submitKnowledgeCheck succeeds
+ * (role gate passed).  Correct values are read server-side from config — the
+ * client never receives them.
+ *
+ * Score = (1 + static_correct) / (1 + number_of_static_questions).
+ * The role question contributes the leading 1 (always correct at this point).
+ *
+ * Request body: { token | _test, answers: { [field]: selectedValue, ... } }
+ * Response: { ok, score, correctCount, totalCount }
+ */
+export const submitStaticKnowledgeCheck = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const ids = extractStudentIds(body, isEmulator, res)
+  if (!ids) return
+  const { gameInstanceId, participantId } = ids
+
+  const rawAnswers = body.answers
+  if (!rawAnswers || typeof rawAnswers !== 'object' || Array.isArray(rawAnswers)) {
+    res.status(400).json({ error: 'answers must be an object' })
+    return
+  }
+  const typedAnswers: Record<string, string> = {}
+  for (const [k, v] of Object.entries(rawAnswers as Record<string, unknown>)) {
+    if (typeof v !== 'string') { res.status(400).json({ error: `answers.${k} must be a string` }); return }
+    typedAnswers[k] = v
+  }
+
+  try {
+    const db = admin.firestore()
+    const configSnap = await db
+      .collection('game_instances').doc(gameInstanceId)
+      .collection('config').doc('main').get()
+    const cd = (configSnap.data() ?? {}) as Record<string, unknown>
+    const stored = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
+    const allQuestions = mergeWithSystemDefaults(stored)
+    const staticKCQuestions = allQuestions
+      .filter(q => q.category === 'knowledge_check' && q.grading === 'static' && !!q.correct_value)
+      .map(q => ({ field: q.field, correct_value: q.correct_value! }))
+
+    const result = await scoreStaticKnowledgeCheck(gameInstanceId, participantId, typedAnswers, staticKCQuestions)
     res.json({ ok: true, ...result })
   } catch (err) {
     const status = (err as { status?: number }).status ?? 500
@@ -1898,7 +1950,7 @@ export type MCOption = { value: string; label: string }
 
 /** A single prep question — free-text, numeric, or multiple-choice. */
 export type PrepTextQuestion = {
-  /** Participant doc field name (must start with prep_) or 'knowledge_check' for the MC role-check. */
+  /** Participant doc field name (must start with prep_/kc_/debrief_) or 'knowledge_check'. */
   field: string
   /** Input type: 'text' textarea, 'number' dollar input, 'mc' radio buttons. Default: 'text'. */
   type: 'text' | 'number' | 'mc'
@@ -1916,27 +1968,74 @@ export type PrepTextQuestion = {
   deletable: boolean
   /** MC options (value = grading key, label = display text). Only present for type 'mc'. */
   options?: MCOption[]
+  /** Lifecycle phase this question belongs to. */
+  category: 'knowledge_check' | 'preparation' | 'debrief'
+  /** Canonical input format. Parallel to `type` but with unambiguous names. */
+  format: 'multiple_choice' | 'number' | 'text'
+  /** How the answer is graded. Only present on knowledge_check questions. */
+  grading?: 'static' | 'assigned_role'
+  /** The single correct option value. Required when grading === 'static'; absent when grading === 'assigned_role'. */
+  correct_value?: string
 }
 
-/** Default text-only prep questions for instances that have never opened Settings. */
+/** Default prep + knowledge-check questions for instances that have never opened Settings. */
 const DEFAULT_PREP_TEXT_QUESTIONS: PrepTextQuestion[] = [
   {
     field: 'prep_first_topic',
-    type: 'text', system: false,
+    type: 'text', system: false, category: 'preparation', format: 'text',
     prompt: 'When you sit down to talk, what is the first topic you will bring up with the other side?',
     placeholder: '', order: 0, hidden: false, deletable: true,
   },
   {
     field: 'prep_question_for_other',
-    type: 'text', system: false,
+    type: 'text', system: false, category: 'preparation', format: 'text',
     prompt: 'What question would you most like to ask the other side? Why?',
     placeholder: '', order: 2, hidden: false, deletable: true,
   },
   {
     field: 'prep_planned_offer_reason',
-    type: 'text', system: false,
+    type: 'text', system: false, category: 'preparation', format: 'text',
     prompt: 'What is the reason for the number you gave?',
     placeholder: '', order: 4, hidden: false, deletable: true,
+  },
+  {
+    field: 'kc_reservation_price',
+    type: 'mc', system: false, category: 'knowledge_check', format: 'multiple_choice',
+    grading: 'static', correct_value: '80',
+    prompt: 'A seller is about to begin a new negotiation. He already has two standing offers for his item: $80 and $50. In the new negotiation, what is his reservation price?',
+    placeholder: '', order: 10, hidden: false, deletable: true,
+    options: [
+      { value: '80',      label: '$80' },
+      { value: '50',      label: '$50' },
+      { value: 'sell_80', label: 'Sell at $80' },
+      { value: 'sell_50', label: 'Sell at $50' },
+    ],
+  },
+  {
+    field: 'kc_batna',
+    type: 'mc', system: false, category: 'knowledge_check', format: 'multiple_choice',
+    grading: 'static', correct_value: 'sell_80',
+    prompt: 'A seller has two standing offers for his item: $80 and $50. What is his BATNA?',
+    placeholder: '', order: 11, hidden: false, deletable: true,
+    options: [
+      { value: '80',      label: '$80' },
+      { value: '50',      label: '$50' },
+      { value: 'sell_80', label: 'Sell at $80' },
+      { value: 'sell_50', label: 'Sell at $50' },
+    ],
+  },
+  {
+    field: 'kc_zopa',
+    type: 'mc', system: false, category: 'knowledge_check', format: 'multiple_choice',
+    grading: 'static', correct_value: '50_90',
+    prompt: "In a negotiation, the seller's reservation price is $50 and the buyer's reservation price is $90. What is the ZOPA?",
+    placeholder: '', order: 12, hidden: false, deletable: true,
+    options: [
+      { value: '0_50',  label: '$0 – $50' },
+      { value: '50_90', label: '$50 – $90' },
+      { value: '90_up', label: '$90 and above' },
+      { value: 'none',  label: 'There is no ZOPA' },
+    ],
   },
 ]
 
@@ -1950,24 +2049,35 @@ const SYSTEM_QUESTION_DEFAULTS: PrepTextQuestion[] = [
   {
     field: 'knowledge_check',
     type: 'mc', system: true, deletable: false,
+    category: 'knowledge_check', format: 'multiple_choice',
+    grading: 'assigned_role',
     prompt: 'What is your role in the negotiation?',
     placeholder: '', order: -1, hidden: false,
     options: [
-      { value: 'Chris', label: 'Chris Gray, the seller' },
-      { value: 'Kelly', label: 'Kelly Kaplan, the buyer' },
+      { value: 'Chris', label: 'Seller (Chris Gray)' },
+      { value: 'Kelly', label: 'Buyer (Kelly Kaplan)' },
     ],
   },
   {
     field: 'prep_estimated_other_price',
     type: 'number', system: true, deletable: false,
+    category: 'preparation', format: 'number',
     prompt: "What is your best guess of the other side's walk-away value (reservation price)?",
     placeholder: 'e.g. 250000', order: 1, hidden: false,
   },
   {
     field: 'prep_planned_first_offer',
     type: 'number', system: true, deletable: false,
+    category: 'preparation', format: 'number',
     prompt: 'Assuming you make the first offer, what number do you think you will put on the table? This is non-binding.',
     placeholder: 'e.g. 300000', order: 3, hidden: false,
+  },
+  {
+    field: 'debrief_initial_offer',
+    type: 'number', system: false, deletable: true,
+    category: 'debrief', format: 'number',
+    prompt: 'What was the first price offer made in your negotiation?',
+    placeholder: 'e.g. 300000', order: 5, hidden: true,
   },
 ]
 
@@ -1989,7 +2099,12 @@ function parsePrepTextQuestions(raw: unknown): PrepTextQuestion[] | null {
     if (typeof item !== 'object' || item === null) return null
     const q = item as Record<string, unknown>
     if (typeof q.field !== 'string') return null
-    if (!q.field.startsWith('prep_') && q.field !== 'knowledge_check') return null
+    if (
+      !q.field.startsWith('prep_') &&
+      !q.field.startsWith('kc_') &&
+      !q.field.startsWith('debrief_') &&
+      q.field !== 'knowledge_check'
+    ) return null
     if (typeof q.prompt      !== 'string')                              return null
     if (typeof q.placeholder !== 'string')                              return null
     if (typeof q.order       !== 'number' || !Number.isFinite(q.order)) return null
@@ -2012,6 +2127,32 @@ function parsePrepTextQuestions(raw: unknown): PrepTextQuestion[] | null {
       }
     }
 
+    // Infer format from type when absent (backward compat for pre-Slice-A stored data).
+    const format: PrepTextQuestion['format'] =
+      q.format === 'multiple_choice' ? 'multiple_choice'
+      : q.format === 'number' ? 'number'
+      : q.format === 'text' ? 'text'
+      : type === 'mc' ? 'multiple_choice'
+      : type === 'number' ? 'number'
+      : 'text'
+
+    // Infer category from field name when absent (backward compat).
+    const category: PrepTextQuestion['category'] =
+      q.category === 'knowledge_check' ? 'knowledge_check'
+      : q.category === 'debrief' ? 'debrief'
+      : q.category === 'preparation' ? 'preparation'
+      : q.field === 'knowledge_check' || q.field.startsWith('kc_') ? 'knowledge_check'
+      : q.field.startsWith('debrief_') ? 'debrief'
+      : 'preparation'
+
+    const grading: PrepTextQuestion['grading'] =
+      q.grading === 'static' ? 'static'
+      : q.grading === 'assigned_role' ? 'assigned_role'
+      : undefined
+
+    const correct_value: string | undefined =
+      typeof q.correct_value === 'string' ? q.correct_value : undefined
+
     const parsed: PrepTextQuestion = {
       field:       q.field       as string,
       type,
@@ -2021,8 +2162,12 @@ function parsePrepTextQuestions(raw: unknown): PrepTextQuestion[] | null {
       order:       q.order       as number,
       hidden:      q.hidden      as boolean,
       deletable:   q.deletable   as boolean,
+      category,
+      format,
     }
-    if (options !== undefined) parsed.options = options
+    if (options !== undefined)       parsed.options       = options
+    if (grading !== undefined)       parsed.grading       = grading
+    if (correct_value !== undefined) parsed.correct_value = correct_value
     result.push(parsed)
   }
   // Guard against absurd sizes.
@@ -2031,6 +2176,31 @@ function parsePrepTextQuestions(raw: unknown): PrepTextQuestion[] | null {
   const fields = result.map(q => q.field)
   if (new Set(fields).size !== fields.length) return null
   return result
+}
+
+/**
+ * Validates knowledge-check grading constraints for a list of questions.
+ * Returns an error string on the first violation, or null if all pass.
+ */
+function validateQuestionSemantics(questions: PrepTextQuestion[]): string | null {
+  for (const q of questions) {
+    if (q.category === 'knowledge_check' && q.format !== 'multiple_choice') {
+      return `Question "${q.field}": knowledge_check questions must have format 'multiple_choice'`
+    }
+    if (q.grading === 'static') {
+      if (!q.correct_value) {
+        return `Question "${q.field}": grading 'static' requires correct_value`
+      }
+      const optionValues = (q.options ?? []).map(o => o.value)
+      if (!optionValues.includes(q.correct_value)) {
+        return `Question "${q.field}": correct_value '${q.correct_value}' does not match any option value`
+      }
+    }
+    if (q.grading === 'assigned_role' && q.correct_value !== undefined) {
+      return `Question "${q.field}": grading 'assigned_role' must not have correct_value`
+    }
+  }
+  return null
 }
 
 /**
@@ -2266,7 +2436,11 @@ export const updateGameConfig = onRequest(async (req, res) => {
   if ('prep_text_questions' in body) {
     const parsed = parsePrepTextQuestions(body.prep_text_questions)
     if (parsed === null) {
-      res.status(400).json({ error: 'prep_text_questions: invalid shape — must be an array of {field(prep_*),prompt,placeholder,order,hidden,deletable} with unique field names' }); return
+      res.status(400).json({ error: 'prep_text_questions: invalid shape — must be an array of {field(prep_*/kc_*/debrief_*),prompt,placeholder,order,hidden,deletable} with unique field names' }); return
+    }
+    const semanticError = validateQuestionSemantics(parsed)
+    if (semanticError !== null) {
+      res.status(400).json({ error: `prep_text_questions: ${semanticError}` }); return
     }
     update.prep_text_questions = parsed
   }
@@ -2336,9 +2510,11 @@ export const getStudentPrepQuestions = onRequest(async (req, res) => {
     const cd = (snap.data() ?? {}) as Record<string, unknown>
     const stored = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
     const visible = mergeWithSystemDefaults(stored)
-      .filter(q => !q.hidden)
+      .filter(q => !q.hidden && q.category !== 'debrief')
       .sort((a, b) => a.order - b.order)
-    res.json({ ok: true, questions: visible })
+    // Strip answer key fields — correct_value and grading must never reach the client.
+    const sanitized = visible.map(({ correct_value: _cv, grading: _g, ...rest }) => rest)
+    res.json({ ok: true, questions: sanitized })
   } catch (err) {
     console.error('getStudentPrepQuestions error:', err)
     res.status(500).json({ error: 'Internal error' })
