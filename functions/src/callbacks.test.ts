@@ -19,7 +19,6 @@ function makeRecord(participantId: string, status: GameResult['status'] = 'compl
     participant_id: participantId,
     status,
     role: 'Chris',
-    raw_score: status === 'no_show' ? null : 150_000,
     normalized_score: status === 'no_show' ? -2 : 0.5,
     knowledge_check_score: 1.0,
     details: {},
@@ -243,6 +242,5 @@ test('no_show participant is pushed with correct status', async () => {
 
   assert.equal(captured.length, 1)
   assert.equal(captured[0].status, 'no_show')
-  assert.equal(captured[0].raw_score, null)
   assert.equal(captured[0].normalized_score, -2)
 })

@@ -6,7 +6,7 @@ export type GameResult = {
   participant_id: string
   status: 'completed' | 'no_show' | 'partial' | 'excluded'
   role: string | null
-  raw_score: number | null
+  raw_score?: number | null
   normalized_score: number | null
   knowledge_check_score: number | null
   details: Record<string, unknown>

@@ -120,7 +120,6 @@ export const pushResultsToClassroom = onCall(
         participant_id: doc.id,
         status,
         role: d.role as string,
-        raw_score: (d.raw_score ?? null) as number | null,
         normalized_score: (d.normalized_score ?? null) as number | null,
         knowledge_check_score: (d.knowledge_check_score ?? null) as number | null,
         details: (d.details ?? {}) as Record<string, unknown>,
