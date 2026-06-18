@@ -40,6 +40,18 @@ function newField(): string {
   return `prep_${Date.now().toString(36)}`
 }
 
+function newKCField(): string {
+  return `kc_${Date.now().toString(36)}`
+}
+
+/** Converts a label string into a URL-safe slug for use as an option value. */
+function slugify(s: string): string {
+  return s.toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40)
+}
+
 // ── Icons ─────────────────────────────────────────────────────────────────────
 
 function EyeIcon({ slashed }: { slashed: boolean }) {
@@ -239,6 +251,8 @@ export default function Settings() {
       field:       newField(),
       type:        'text',
       system:      false,
+      category:    'preparation',
+      format:      'text',
       prompt:      '',
       placeholder: '',
       order:       maxOrder + 1,
@@ -254,6 +268,28 @@ export default function Settings() {
     setPrepQuestions(prev => prev.map((q, i) => i === idx ? { ...q, ...patch } : q))
   }
 
+  const handlePrepAddKCQuestion = () => {
+    setPrepSaveError(null)
+    const maxOrder = prepQuestions.reduce((m, q) => Math.max(m, q.order), -1)
+    const newIdx = prepQuestions.length
+    const newQ: PrepTextQuestion = {
+      field:       newKCField(),
+      type:        'mc',
+      system:      false,
+      category:    'knowledge_check',
+      format:      'multiple_choice',
+      grading:     'static',
+      prompt:      '',
+      placeholder: '',
+      order:       maxOrder + 1,
+      hidden:      false,
+      deletable:   true,
+      options:     [],
+    }
+    setPrepQuestions(prev => [...prev, newQ])
+    setExpandedQ(newIdx)
+  }
+
   const handlePrepOptionLabel = (qIdx: number, optIdx: number, label: string) => {
     setPrepSaveError(null)
     setPrepQuestions(prev => prev.map((q, i) => {
@@ -261,6 +297,34 @@ export default function Settings() {
       const newOptions: MCOption[] = q.options.map((o, oi) => oi === optIdx ? { ...o, label } : o)
       return { ...q, options: newOptions }
     }))
+  }
+
+  /** Locks the option value from its label on blur (only for new options with no value yet). */
+  const handlePrepOptionBlur = (qIdx: number, optIdx: number) => {
+    setPrepQuestions(prev => prev.map((q, i) => {
+      if (i !== qIdx || !q.options) return q
+      const opt = q.options[optIdx]
+      if (opt.value) return q
+      const label = opt.label.trim()
+      if (!label) return q
+      const existingValues = q.options.filter((_, oi) => oi !== optIdx).map(o => o.value).filter(Boolean)
+      const slug = slugify(label)
+      const value = (slug && !existingValues.includes(slug)) ? slug : `opt_${optIdx + 1}`
+      return { ...q, options: q.options.map((o, oi) => oi === optIdx ? { ...o, value } : o) }
+    }))
+  }
+
+  const handlePrepAddOption = (qIdx: number) => {
+    setPrepSaveError(null)
+    setPrepQuestions(prev => prev.map((q, i) => {
+      if (i !== qIdx) return q
+      return { ...q, options: [...(q.options ?? []), { value: '', label: '' }] }
+    }))
+  }
+
+  const handlePrepCorrectValue = (idx: number, value: string) => {
+    setPrepSaveError(null)
+    handlePrepEdit(idx, { correct_value: value })
   }
 
   const handlePrepToggleHidden = (idx: number) => {
@@ -619,6 +683,18 @@ export default function Settings() {
                           background: '#f1f5f9', color: '#64748b', borderRadius: 3, flexShrink: 0,
                         }}>{q.type}</span>
 
+                        {/* Category badge */}
+                        <span style={{
+                          fontSize: '0.62rem', padding: '0.1rem 0.35rem',
+                          background: q.category === 'knowledge_check'
+                            ? '#fef3c7' : q.category === 'debrief'
+                            ? '#f0fdf4' : '#f5f3ff',
+                          color: q.category === 'knowledge_check'
+                            ? '#92400e' : q.category === 'debrief'
+                            ? '#166534' : '#6d28d9',
+                          borderRadius: 3, flexShrink: 0,
+                        }}>{q.category}</span>
+
                         {/* System badge */}
                         {q.system && (
                           <span style={{
@@ -700,30 +776,132 @@ export default function Settings() {
                             </>
                           )}
 
-                          {/* MC option labels */}
-                          {q.type === 'mc' && q.options && (
+                          {/* MC options — with correct-answer selector for KC, assigned-role note, or plain labels */}
+                          {q.type === 'mc' && q.options !== undefined && (
                             <div style={{ marginTop: '0.625rem' }}>
-                              <label style={{ ...fieldLabel, marginBottom: '0.375rem' }}>
-                                Option labels <span style={{ fontWeight: 400, color: '#9ca3af' }}>(value is locked; only the display label is editable)</span>
-                              </label>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-                                {q.options.map((opt, optIdx) => (
-                                  <div key={opt.value} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                    <span style={{
-                                      fontSize: '0.75rem', fontFamily: 'monospace', color: '#64748b',
-                                      background: '#f1f5f9', padding: '0.25rem 0.5rem', borderRadius: 3,
-                                      minWidth: '3.5rem', textAlign: 'center', flexShrink: 0,
-                                    }}>{opt.value}</span>
-                                    <input
-                                      type="text"
-                                      value={opt.label}
-                                      onChange={e => handlePrepOptionLabel(idx, optIdx, e.target.value)}
-                                      disabled={prepDisabled}
-                                      style={{ ...inputStyle, fontSize: '0.875rem', padding: '0.35rem 0.625rem' }}
-                                    />
+                              {q.grading === 'assigned_role' ? (
+                                <>
+                                  <div style={{
+                                    fontSize: '0.8rem', color: '#1d4ed8', background: '#eff6ff',
+                                    border: '1px solid #bfdbfe', borderRadius: 4,
+                                    padding: '0.4rem 0.625rem', marginBottom: '0.5rem',
+                                  }}>
+                                    Graded against each student's assigned role.
                                   </div>
-                                ))}
-                              </div>
+                                  <label style={{ ...fieldLabel, marginBottom: '0.375rem' }}>
+                                    Option labels <span style={{ fontWeight: 400, color: '#9ca3af' }}>(value is locked; only the display label is editable)</span>
+                                  </label>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                                    {q.options.map((opt, optIdx) => (
+                                      <div key={opt.value || optIdx} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <span style={{
+                                          fontSize: '0.75rem', fontFamily: 'monospace', color: '#64748b',
+                                          background: '#f1f5f9', padding: '0.25rem 0.5rem', borderRadius: 3,
+                                          minWidth: '3.5rem', textAlign: 'center', flexShrink: 0,
+                                        }}>{opt.value}</span>
+                                        <input
+                                          type="text"
+                                          value={opt.label}
+                                          onChange={e => handlePrepOptionLabel(idx, optIdx, e.target.value)}
+                                          disabled={prepDisabled}
+                                          style={{ ...inputStyle, fontSize: '0.875rem', padding: '0.35rem 0.625rem' }}
+                                        />
+                                      </div>
+                                    ))}
+                                  </div>
+                                </>
+                              ) : q.grading === 'static' ? (
+                                <>
+                                  <label style={{ ...fieldLabel, marginBottom: '0.375rem' }}>
+                                    Correct answer{' '}
+                                    <span style={{ fontWeight: 400, color: '#9ca3af' }}>
+                                      (select the correct option; value is locked once set, only the label is editable)
+                                    </span>
+                                  </label>
+                                  {q.options.length === 0 && (
+                                    <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: '0 0 0.5rem', fontStyle: 'italic' }}>
+                                      No options yet — add options below, then select the correct answer.
+                                    </p>
+                                  )}
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                                    {q.options.map((opt, optIdx) => {
+                                      const preview = slugify(opt.label) || `opt_${optIdx + 1}`
+                                      return (
+                                        <div key={opt.value || `_new_${optIdx}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                          {/* Correct-answer radio */}
+                                          <input
+                                            type="radio"
+                                            name={`kc_correct_${q.field}`}
+                                            checked={!!opt.value && q.correct_value === opt.value}
+                                            onChange={() => { if (opt.value) handlePrepCorrectValue(idx, opt.value) }}
+                                            disabled={prepDisabled || !opt.value}
+                                            title={opt.value ? 'Mark as correct answer' : 'Save an option label first to select it'}
+                                            style={{ flexShrink: 0, cursor: opt.value && !prepDisabled ? 'pointer' : 'default' }}
+                                          />
+                                          {/* Value chip: locked or preview */}
+                                          <span style={{
+                                            fontSize: '0.75rem', fontFamily: 'monospace',
+                                            color: opt.value ? '#64748b' : '#94a3b8',
+                                            background: opt.value ? '#f1f5f9' : '#fafafa',
+                                            border: opt.value ? '1px solid transparent' : '1px dashed #cbd5e1',
+                                            padding: '0.25rem 0.5rem', borderRadius: 3,
+                                            minWidth: '3.5rem', textAlign: 'center', flexShrink: 0,
+                                            fontStyle: opt.value ? 'normal' : 'italic',
+                                          }}>{opt.value || preview}</span>
+                                          {/* Label input */}
+                                          <input
+                                            type="text"
+                                            value={opt.label}
+                                            onChange={e => handlePrepOptionLabel(idx, optIdx, e.target.value)}
+                                            onBlur={() => { if (!opt.value) handlePrepOptionBlur(idx, optIdx) }}
+                                            disabled={prepDisabled}
+                                            placeholder="Option label…"
+                                            style={{ ...inputStyle, fontSize: '0.875rem', padding: '0.35rem 0.625rem' }}
+                                          />
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                  {!q.system && (
+                                    <button
+                                      onClick={() => handlePrepAddOption(idx)}
+                                      disabled={prepDisabled}
+                                      style={{
+                                        marginTop: '0.375rem', alignSelf: 'flex-start',
+                                        fontSize: '0.78rem', padding: '0.25rem 0.625rem',
+                                        background: 'none', border: '1px solid #cbd5e1', borderRadius: 3,
+                                        color: '#64748b', cursor: prepDisabled ? 'not-allowed' : 'pointer',
+                                      }}
+                                    >
+                                      + Add option
+                                    </button>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  <label style={{ ...fieldLabel, marginBottom: '0.375rem' }}>
+                                    Option labels <span style={{ fontWeight: 400, color: '#9ca3af' }}>(value is locked; only the display label is editable)</span>
+                                  </label>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+                                    {q.options.map((opt, optIdx) => (
+                                      <div key={opt.value || optIdx} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                        <span style={{
+                                          fontSize: '0.75rem', fontFamily: 'monospace', color: '#64748b',
+                                          background: '#f1f5f9', padding: '0.25rem 0.5rem', borderRadius: 3,
+                                          minWidth: '3.5rem', textAlign: 'center', flexShrink: 0,
+                                        }}>{opt.value}</span>
+                                        <input
+                                          type="text"
+                                          value={opt.label}
+                                          onChange={e => handlePrepOptionLabel(idx, optIdx, e.target.value)}
+                                          disabled={prepDisabled}
+                                          style={{ ...inputStyle, fontSize: '0.875rem', padding: '0.35rem 0.625rem' }}
+                                        />
+                                      </div>
+                                    ))}
+                                  </div>
+                                </>
+                              )}
                             </div>
                           )}
                         </div>
@@ -735,17 +913,30 @@ export default function Settings() {
 
               {/* Add question + Save row */}
               <div style={{ padding: '0.875rem 1rem', borderTop: '1px solid #f1f5f9' }}>
-                <button
-                  onClick={handlePrepAddQuestion}
-                  disabled={prepDisabled}
-                  style={{
-                    fontSize: '0.875rem', padding: '0.4rem 0.875rem',
-                    background: 'none', border: '1px solid #94a3b8', borderRadius: 5, color: '#475569',
-                    cursor: prepDisabled ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  + Add question
-                </button>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={handlePrepAddQuestion}
+                    disabled={prepDisabled}
+                    style={{
+                      fontSize: '0.875rem', padding: '0.4rem 0.875rem',
+                      background: 'none', border: '1px solid #94a3b8', borderRadius: 5, color: '#475569',
+                      cursor: prepDisabled ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    + Add prep question
+                  </button>
+                  <button
+                    onClick={handlePrepAddKCQuestion}
+                    disabled={prepDisabled}
+                    style={{
+                      fontSize: '0.875rem', padding: '0.4rem 0.875rem',
+                      background: 'none', border: '1px solid #d97706', borderRadius: 5, color: '#92400e',
+                      cursor: prepDisabled ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    + Add knowledge-check question
+                  </button>
+                </div>
 
                 <div style={saveRowStyle}>
                   <button onClick={handlePrepSave} disabled={prepDisabled} style={saveBtn(prepSaving, prepDisabled)}>
