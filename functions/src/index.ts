@@ -1024,6 +1024,19 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
 
   await instanceRef.set({ status: 'active' }, { merge: true })
 
+  // ── Seed config/main with PDF URL defaults on first use ──────────────────────
+  const configRef = instanceRef.collection('config').doc('main')
+  const configSnap = await configRef.get()
+  if (!configSnap.exists) {
+    await configRef.set({
+      reservation_price_chris: CONFIG_DEFAULTS.reservation_price_chris,
+      reservation_price_kelly: CONFIG_DEFAULTS.reservation_price_kelly,
+      public_info_url: '/role-info/public.pdf',
+      chris_info_url: '/role-info/seller.pdf',
+      kelly_info_url: '/role-info/buyer.pdf',
+    })
+  }
+
   // ~70% of enrolled students attended; the rest are absent (enrolled record only).
   const presentCount = Math.max(2, Math.round(numStudents * 0.7))
   const presentSet = new Set(students.slice(0, presentCount).map((s) => s.id))
@@ -1131,26 +1144,12 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
   await matchBatch.commit()
 
   // ── Completed: realistic outcomes ────────────────────────────────────────────
-  // Prices come from config; create with standard defaults if config is absent.
-  const PRICE_DEFAULTS = {
-    reservation_price_chris: 25_000,
-    reservation_price_kelly: 475_000,
-  } as const
-  const configRef = instanceRef.collection('config').doc('main')
-  const configSnap = await configRef.get()
-  let priceChris: number
-  let priceKelly: number
-  if (!configSnap.exists) {
-    priceChris = PRICE_DEFAULTS.reservation_price_chris
-    priceKelly = PRICE_DEFAULTS.reservation_price_kelly
-    await configRef.set({ reservation_price_chris: priceChris, reservation_price_kelly: priceKelly })
-  } else {
-    const cd = configSnap.data()!
-    priceChris = typeof cd.reservation_price_chris === 'number'
-      ? (cd.reservation_price_chris as number) : PRICE_DEFAULTS.reservation_price_chris
-    priceKelly = typeof cd.reservation_price_kelly === 'number'
-      ? (cd.reservation_price_kelly as number) : PRICE_DEFAULTS.reservation_price_kelly
-  }
+  // Prices come from config (seeded with defaults above if absent).
+  const cd = (configSnap.data() ?? {}) as Record<string, unknown>
+  const priceChris = typeof cd.reservation_price_chris === 'number'
+    ? (cd.reservation_price_chris as number) : CONFIG_DEFAULTS.reservation_price_chris
+  const priceKelly = typeof cd.reservation_price_kelly === 'number'
+    ? (cd.reservation_price_kelly as number) : CONFIG_DEFAULTS.reservation_price_kelly
 
   // ~10% walk-aways (no deal), 1 deadlocked group, rest are agreements with varied prices.
   const walkAwayCount = Math.max(0, Math.round(groupRecords.length * 0.10))
