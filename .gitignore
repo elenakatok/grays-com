@@ -45,3 +45,8 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Local emulator state and ad-hoc dev scripts
+emulator-data/
+frontend/verify-gradebook.mjs
+functions/seed-gradebook.mjs
