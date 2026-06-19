@@ -318,10 +318,10 @@ export default function InstructorDashboard() {
   const [finalizePhase, setFinalizePhase] = useState<FinalizePhase>({ phase: 'idle' })
 
   const handlePushOnly = async () => {
-    if (!gameInstanceId) return
+    if (!callArgs) return
     setFinalizePhase({ phase: 'pushing' })
     try {
-      const result = await pushResultsToClassroom(gameInstanceId)
+      const result = await pushResultsToClassroom(callArgs)
       if (result.failed.length === 0) {
         setFinalizePhase({ phase: 'success', total: result.total })
       } else {
@@ -337,10 +337,10 @@ export default function InstructorDashboard() {
   }
 
   const handleFinalize = async () => {
-    if (!gameInstanceId) return
+    if (!callArgs) return
     setFinalizePhase({ phase: 'finalizing' })
     try {
-      await finalizeInstance(gameInstanceId)
+      await finalizeInstance(callArgs)
     } catch (err) {
       setFinalizePhase({
         phase: 'error',

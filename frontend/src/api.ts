@@ -335,19 +335,19 @@ export type PushResult = {
 }
 
 const _finalizeInstance = httpsCallable<
-  { game_instance_id: string },
+  InstructorCallArgs,
   FinalizeResult
 >(functions, 'finalizeInstance')
 
 const _pushResultsToClassroom = httpsCallable<
-  { game_instance_id: string },
+  InstructorCallArgs,
   PushResult
 >(functions, 'pushResultsToClassroom')
 
 /** Computes and writes z-scores for all participants in a game instance. */
-export const finalizeInstance = (gameInstanceId: string): Promise<FinalizeResult> =>
-  _finalizeInstance({ game_instance_id: gameInstanceId }).then((r) => r.data)
+export const finalizeInstance = (args: InstructorCallArgs): Promise<FinalizeResult> =>
+  _finalizeInstance(args).then((r) => r.data)
 
 /** Pushes finalized scores from Firestore to the classroom gradebook. */
-export const pushResultsToClassroom = (gameInstanceId: string): Promise<PushResult> =>
-  _pushResultsToClassroom({ game_instance_id: gameInstanceId }).then((r) => r.data)
+export const pushResultsToClassroom = (args: InstructorCallArgs): Promise<PushResult> =>
+  _pushResultsToClassroom(args).then((r) => r.data)

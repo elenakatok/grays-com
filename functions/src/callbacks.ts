@@ -1,7 +1,8 @@
 import * as admin from 'firebase-admin'
-import { onCall, HttpsError } from 'firebase-functions/v2/https'
+import { onCall } from 'firebase-functions/v2/https'
 import { reportResult } from './engine/reportResult'
 import type { GameResult } from './engine/reportResult'
+import { extractInstructorGameIdCall } from './engine/instructorAuth'
 
 export type FailedPush = { participant_id: string; reason: string }
 
@@ -90,11 +91,10 @@ export async function dispatchResults(
 export const pushResultsToClassroom = onCall(
   { invoker: 'public' },
   async (request) => {
-    const data = request.data as { game_instance_id?: unknown }
-    const gameInstanceId = data.game_instance_id
-    if (typeof gameInstanceId !== 'string' || gameInstanceId === '') {
-      throw new HttpsError('invalid-argument', 'game_instance_id is required')
-    }
+    const gameInstanceId = extractInstructorGameIdCall(
+      request.data as Record<string, unknown>,
+      process.env.FUNCTIONS_EMULATOR === 'true',
+    )
 
     const callbackUrl = process.env.CLASSROOM_CALLBACK_URL ?? ''
     const callbackSecret = process.env.CLASSROOM_CALLBACK_SECRET ?? ''

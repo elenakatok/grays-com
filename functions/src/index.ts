@@ -3,6 +3,7 @@ import * as admin from 'firebase-admin'
 import { FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { onRequest, onCall, HttpsError } from 'firebase-functions/v2/https'
 import { verifyClassroomToken, ClassroomTokenPayload } from './engine/verifyToken'
+import { extractInstructorGameIdCall } from './engine/instructorAuth'
 import { reportResult } from './engine/reportResult'
 import { matchParticipants } from './matching'
 import { computeZScores } from './finalize'
@@ -2227,11 +2228,10 @@ function validateQuestionSemantics(questions: PrepTextQuestion[]): string | null
 export const finalizeInstance = onCall(
   { invoker: 'public' },
   async (request) => {
-    const data = request.data as { game_instance_id?: unknown }
-    const gameInstanceId = data.game_instance_id
-    if (typeof gameInstanceId !== 'string' || gameInstanceId === '') {
-      throw new HttpsError('invalid-argument', 'game_instance_id is required')
-    }
+    const gameInstanceId = extractInstructorGameIdCall(
+      request.data as Record<string, unknown>,
+      process.env.FUNCTIONS_EMULATOR === 'true',
+    )
 
     const db = admin.firestore()
     const instanceRef = db.collection('game_instances').doc(gameInstanceId)
