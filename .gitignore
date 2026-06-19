@@ -17,6 +17,7 @@ frontend/.env.local
 frontend/.env.*.local
 functions/.env
 functions/.env.local
+functions/.env.*
 functions/.secret.local
 
 # Firebase
