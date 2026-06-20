@@ -201,6 +201,10 @@ export type PrepTextQuestion = {
   format: 'multiple_choice' | 'number' | 'text'
   grading?: 'static' | 'assigned_role'
   correct_value?: string
+  /** Which role(s) see this question. 'both' = all participants. */
+  role_target: 'Chris' | 'Kelly' | 'both'
+  /** Explanation shown after submitting a graded KC answer. Absent pre-submission (stripped server-side). */
+  explanation?: string
 }
 
 // ── Reports ───────────────────────────────────────────────────────────────────

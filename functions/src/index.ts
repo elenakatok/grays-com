@@ -1988,66 +1988,125 @@ export type PrepTextQuestion = {
   grading?: 'static' | 'assigned_role'
   /** The single correct option value. Required when grading === 'static'; absent when grading === 'assigned_role'. */
   correct_value?: string
+  /** Which role(s) see this question. 'both' = all participants. Legacy stored questions without this field default to 'both'. */
+  role_target: 'Chris' | 'Kelly' | 'both'
+  /** Explanation shown to the student after they submit a graded KC answer. Never sent to the client pre-submission. */
+  explanation?: string
 }
 
 /** Default prep + knowledge-check questions for instances that have never opened Settings. */
 const DEFAULT_PREP_TEXT_QUESTIONS: PrepTextQuestion[] = [
+  // ── Preparation questions (ungraded, both roles) ─────────────────────────────
   {
     field: 'prep_first_topic',
     type: 'text', system: false, category: 'preparation', format: 'text',
+    role_target: 'both',
     prompt: 'When you sit down to talk, what is the first topic you will bring up with the other side?',
     placeholder: '', order: 0, hidden: false, deletable: true,
   },
   {
     field: 'prep_question_for_other',
     type: 'text', system: false, category: 'preparation', format: 'text',
+    role_target: 'both',
     prompt: 'What question would you most like to ask the other side? Why?',
     placeholder: '', order: 2, hidden: false, deletable: true,
   },
   {
     field: 'prep_planned_offer_reason',
     type: 'text', system: false, category: 'preparation', format: 'text',
+    role_target: 'both',
     prompt: 'What is the reason for the number you gave?',
     placeholder: '', order: 4, hidden: false, deletable: true,
   },
+
+  // ── Knowledge-check Q2: BATNA ─────────────────────────────────────────────────
   {
-    field: 'kc_reservation_price',
+    field: 'kc_chris_batna',
     type: 'mc', system: false, category: 'knowledge_check', format: 'multiple_choice',
-    grading: 'static', correct_value: '80',
-    prompt: 'A seller is about to begin a new negotiation. He already has two standing offers for his item: $80 and $50. In the new negotiation, what is his reservation price?',
+    role_target: 'Chris', grading: 'static', correct_value: 'keep',
+    prompt: 'If no deal is reached, your best alternative is to:',
     placeholder: '', order: 10, hidden: false, deletable: true,
     options: [
-      { value: '80',      label: '$80' },
-      { value: '50',      label: '$50' },
-      { value: 'sell_80', label: 'Sell at $80' },
-      { value: 'sell_50', label: 'Sell at $50' },
+      { value: 'keep',    label: 'Keep the Grays.com domain and continue using it for your business' },
+      { value: 'resell',  label: 'Sell the domain to a middle-man ticket reseller for $35' },
+      { value: 'lapse',   label: 'Let the registration lapse and give up the name' },
+      { value: 'buy_alt', label: 'Buy WashingtonGrays.com instead' },
     ],
+    explanation: 'Correct: A. You already own the name; with no deal you simply keep it.',
   },
   {
-    field: 'kc_batna',
+    field: 'kc_kelly_batna',
     type: 'mc', system: false, category: 'knowledge_check', format: 'multiple_choice',
-    grading: 'static', correct_value: 'sell_80',
-    prompt: 'A seller has two standing offers for his item: $80 and $50. What is his BATNA?',
+    role_target: 'Kelly', grading: 'static', correct_value: 'register',
+    prompt: 'If no deal is reached, your best alternative is to:',
+    placeholder: '', order: 10, hidden: false, deletable: true,
+    options: [
+      { value: 'vancouver', label: "Use the team's existing Vancouver domain" },
+      { value: 'register',  label: 'Register and use WashingtonGrays.com for a $10 fee' },
+      { value: 'icann',     label: 'Take the matter to ICANN to force a transfer' },
+      { value: 'rebrand',   label: "Abandon the 'Grays' name and rebrand the team" },
+    ],
+    explanation: "Correct: B. Per your instructions, WashingtonGrays.com is unregistered and available for $10 — your fallback if you can't get Grays.com.",
+  },
+
+  // ── Knowledge-check Q3: own walk-away value ───────────────────────────────────
+  {
+    field: 'kc_chris_walkaway',
+    type: 'mc', system: false, category: 'knowledge_check', format: 'multiple_choice',
+    role_target: 'Chris', grading: 'static', correct_value: 'switch_25k',
+    prompt: 'Which figure applies to you?',
     placeholder: '', order: 11, hidden: false, deletable: true,
     options: [
-      { value: '80',      label: '$80' },
-      { value: '50',      label: '$50' },
-      { value: 'sell_80', label: 'Sell at $80' },
-      { value: 'sell_50', label: 'Sell at $50' },
+      { value: 'switch_25k',  label: '~$25,000 — your estimated total cost to switch your business to a new domain' },
+      { value: 'gartner_75k', label: '$75,000 — the Gartner estimate for managing a new domain name' },
+      { value: 'biz_7_5m',    label: '$7.5 million — the most ever paid for a domain name (business.com)' },
+      { value: 'reseller_35', label: '$35 — what middle-man ticket resellers pay for domains' },
     ],
+    explanation: 'Correct: A. You can replace the name for ~$25K, so you needn\'t accept less than roughly that — and ideally far more.',
   },
   {
-    field: 'kc_zopa',
+    field: 'kc_kelly_walkaway',
     type: 'mc', system: false, category: 'knowledge_check', format: 'multiple_choice',
-    grading: 'static', correct_value: '50_90',
-    prompt: "In a negotiation, the seller's reservation price is $50 and the buyer's reservation price is $90. What is the ZOPA?",
+    role_target: 'Kelly', grading: 'static', correct_value: 'loss_475k',
+    prompt: 'Which figure applies to you?',
+    placeholder: '', order: 11, hidden: false, deletable: true,
+    options: [
+      { value: 'reg_10',      label: '$10 — the registration fee for WashingtonGrays.com' },
+      { value: 'loss_475k',   label: '~$475,000 — your expected first-year cost (≈1% of ticket sales) of using WashingtonGrays.com instead of Grays.com' },
+      { value: 'stadium_440m', label: '$440 million — the cost of the new stadium' },
+      { value: 'reseller_35', label: '$35 — what middle-man ticket resellers pay for domains' },
+    ],
+    explanation: 'Correct: B. Your best alternative is WashingtonGrays.com; the ~$475K expected loss from using it is your ceiling.',
+  },
+
+  // ── Knowledge-check Q5: implied ZOPA ─────────────────────────────────────────
+  {
+    field: 'kc_chris_zopa',
+    type: 'mc', system: false, category: 'knowledge_check', format: 'multiple_choice',
+    role_target: 'Chris', grading: 'static', correct_value: 'floor_to_kelly_max',
+    prompt: 'Based on your numbers, the implied ZOPA is the range from:',
     placeholder: '', order: 12, hidden: false, deletable: true,
     options: [
-      { value: '0_50',  label: '$0 – $50' },
-      { value: '50_90', label: '$50 – $90' },
-      { value: '90_up', label: '$90 and above' },
-      { value: 'none',  label: 'There is no ZOPA' },
+      { value: 'floor_to_kelly_max', label: "Your ~$25,000 floor up to your guess of Kelly's maximum" },
+      { value: 'zero_to_switch',     label: '$0 up to your ~$25,000 switching cost' },
+      { value: 'kelly_max_to_7_5m',  label: "Your guess of Kelly's maximum up to $7.5 million" },
+      { value: 'single_25k',         label: 'Exactly $25,000 — there is no range, just a single number' },
     ],
+    explanation: "Correct: A. As the seller, your reservation price is the bottom of the ZOPA; the buyer's reservation price — your estimate of Kelly's max — is the top. A deal is possible only if your guess of Kelly's max exceeds your ~$25K floor.",
+  },
+  {
+    field: 'kc_kelly_zopa',
+    type: 'mc', system: false, category: 'knowledge_check', format: 'multiple_choice',
+    role_target: 'Kelly', grading: 'static', correct_value: 'chris_min_to_ceiling',
+    prompt: 'Based on your numbers, the implied ZOPA is the range from:',
+    placeholder: '', order: 12, hidden: false, deletable: true,
+    options: [
+      { value: 'chris_min_to_ceiling', label: "Your guess of Chris's minimum up to your ~$475,000 maximum" },
+      { value: 'zero_to_475k',         label: '$0 up to your ~$475,000 maximum' },
+      { value: '475k_to_7_5m',         label: 'Your ~$475,000 maximum up to $7.5 million' },
+      { value: 'single_475k',          label: 'Exactly $475,000 — there is no range, just a single number' },
+    ],
+    explanation: "Correct: A. As the buyer, your reservation price is the top of the ZOPA; the seller's reservation price — your estimate of Chris's min — is the bottom. A deal is possible only if your ~$475K ceiling exceeds your guess of Chris's min.",
   },
 ]
 
@@ -2062,7 +2121,7 @@ const SYSTEM_QUESTION_DEFAULTS: PrepTextQuestion[] = [
     field: 'knowledge_check',
     type: 'mc', system: true, deletable: false,
     category: 'knowledge_check', format: 'multiple_choice',
-    grading: 'assigned_role',
+    role_target: 'both', grading: 'assigned_role',
     prompt: 'What is your role in the negotiation?',
     placeholder: '', order: -1, hidden: false,
     options: [
@@ -2074,6 +2133,7 @@ const SYSTEM_QUESTION_DEFAULTS: PrepTextQuestion[] = [
     field: 'prep_estimated_other_price',
     type: 'number', system: true, deletable: false,
     category: 'preparation', format: 'number',
+    role_target: 'both',
     prompt: "What is your best guess of the other side's walk-away value (reservation price)?",
     placeholder: 'e.g. 250000', order: 1, hidden: false,
   },
@@ -2081,6 +2141,7 @@ const SYSTEM_QUESTION_DEFAULTS: PrepTextQuestion[] = [
     field: 'prep_planned_first_offer',
     type: 'number', system: true, deletable: false,
     category: 'preparation', format: 'number',
+    role_target: 'both',
     prompt: 'Assuming you make the first offer, what number do you think you will put on the table? This is non-binding.',
     placeholder: 'e.g. 300000', order: 3, hidden: false,
   },
@@ -2088,6 +2149,7 @@ const SYSTEM_QUESTION_DEFAULTS: PrepTextQuestion[] = [
     field: 'debrief_initial_offer',
     type: 'number', system: false, deletable: true,
     category: 'debrief', format: 'number',
+    role_target: 'both',
     prompt: 'What was the first price offer made in your negotiation?',
     placeholder: 'e.g. 300000', order: 5, hidden: true,
   },
@@ -2165,6 +2227,15 @@ function parsePrepTextQuestions(raw: unknown): PrepTextQuestion[] | null {
     const correct_value: string | undefined =
       typeof q.correct_value === 'string' ? q.correct_value : undefined
 
+    // Default 'both' for legacy stored questions that predate role_target.
+    const role_target: PrepTextQuestion['role_target'] =
+      q.role_target === 'Chris' ? 'Chris'
+      : q.role_target === 'Kelly' ? 'Kelly'
+      : 'both'
+
+    const explanation: string | undefined =
+      typeof q.explanation === 'string' ? q.explanation : undefined
+
     const parsed: PrepTextQuestion = {
       field:       q.field       as string,
       type,
@@ -2176,10 +2247,12 @@ function parsePrepTextQuestions(raw: unknown): PrepTextQuestion[] | null {
       deletable:   q.deletable   as boolean,
       category,
       format,
+      role_target,
     }
     if (options !== undefined)       parsed.options       = options
     if (grading !== undefined)       parsed.grading       = grading
     if (correct_value !== undefined) parsed.correct_value = correct_value
+    if (explanation !== undefined)   parsed.explanation   = explanation
     result.push(parsed)
   }
   // Guard against absurd sizes.
@@ -2195,7 +2268,14 @@ function parsePrepTextQuestions(raw: unknown): PrepTextQuestion[] | null {
  * Returns an error string on the first violation, or null if all pass.
  */
 function validateQuestionSemantics(questions: PrepTextQuestion[]): string | null {
+  const validRoleTargets = ['Chris', 'Kelly', 'both'] as const
   for (const q of questions) {
+    if (!validRoleTargets.includes(q.role_target)) {
+      return `Question "${q.field}": role_target must be 'Chris', 'Kelly', or 'both'`
+    }
+    if (q.explanation !== undefined && typeof q.explanation !== 'string') {
+      return `Question "${q.field}": explanation must be a string`
+    }
     if (q.category === 'knowledge_check' && q.format !== 'multiple_choice') {
       return `Question "${q.field}": knowledge_check questions must have format 'multiple_choice'`
     }
@@ -2539,8 +2619,8 @@ export const getStudentPrepQuestions = onRequest(async (req, res) => {
     const visible = mergeWithSystemDefaults(stored)
       .filter(q => !q.hidden && q.category !== 'debrief')
       .sort((a, b) => a.order - b.order)
-    // Strip answer key fields — correct_value and grading must never reach the client.
-    const sanitized = visible.map(({ correct_value: _cv, grading: _g, ...rest }) => rest)
+    // Strip answer key fields — correct_value, grading, and explanation must never reach the client pre-submission.
+    const sanitized = visible.map(({ correct_value: _cv, grading: _g, explanation: _ex, ...rest }) => rest)
     // Override KC role option labels with the configured display names.
     const withNames = sanitized.map(q => {
       if (q.field !== 'knowledge_check' || !q.options) return q
