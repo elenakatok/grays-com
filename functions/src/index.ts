@@ -196,6 +196,36 @@ export const submitKnowledgeCheck = onRequest(async (req, res) => {
 
   try {
     const result = await scoreKnowledgeCheck(gameInstanceId, participantId, answer)
+
+    // Zero-static finalization: when the role question is answered correctly and
+    // this participant has no role-filtered static KC questions, write
+    // knowledge_check_score = 1/1 immediately so the batch endpoint is unreachable.
+    if (result.correct && !result.alreadyCompleted) {
+      const db = admin.firestore()
+      const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+      const configSnap = await instanceRef.collection('config').doc('main').get()
+      const cd = (configSnap.data() ?? {}) as Record<string, unknown>
+      const stored = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
+      // Same role filter used by submitStaticKnowledgeCheck and submitStaticKnowledgeCheckQuestion.
+      const staticKCQuestions = mergeWithSystemDefaults(stored).filter(q =>
+        q.category === 'knowledge_check' &&
+        q.grading === 'static' &&
+        !!q.correct_value &&
+        (q.role_target === 'both' || q.role_target === answer),
+      )
+
+      if (staticKCQuestions.length === 0) {
+        const participantRef = instanceRef.collection('participants').doc(participantId)
+        await db.runTransaction(async (tx) => {
+          const snap = await tx.get(participantRef)
+          if ((snap.data() ?? {}).knowledge_check_score == null) {
+            const { score } = calcKCScore({}, [])
+            tx.update(participantRef, { knowledge_check_score: score })
+          }
+        })
+      }
+    }
+
     res.json({ ok: true, ...result })
   } catch (err) {
     const status = (err as { status?: number }).status ?? 500
