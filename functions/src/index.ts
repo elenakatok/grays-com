@@ -237,14 +237,29 @@ export const submitStaticKnowledgeCheck = onRequest(async (req, res) => {
 
   try {
     const db = admin.firestore()
-    const configSnap = await db
-      .collection('game_instances').doc(gameInstanceId)
-      .collection('config').doc('main').get()
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+    const [configSnap, participantSnap] = await Promise.all([
+      instanceRef.collection('config').doc('main').get(),
+      instanceRef.collection('participants').doc(participantId).get(),
+    ])
+
+    const participantRole = (participantSnap.data() ?? {}).role as 'Chris' | 'Kelly' | undefined
+    if (!participantRole) {
+      res.status(503).json({ error: 'Role not yet assigned.' })
+      return
+    }
+
     const cd = (configSnap.data() ?? {}) as Record<string, unknown>
     const stored = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
     const allQuestions = mergeWithSystemDefaults(stored)
+    // Denominator is role-filtered: a student is only scored on questions they were shown.
     const staticKCQuestions = allQuestions
-      .filter(q => q.category === 'knowledge_check' && q.grading === 'static' && !!q.correct_value)
+      .filter(q =>
+        q.category === 'knowledge_check' &&
+        q.grading === 'static' &&
+        !!q.correct_value &&
+        (q.role_target === 'both' || q.role_target === participantRole),
+      )
       .map(q => ({ field: q.field, correct_value: q.correct_value! }))
 
     const result = await scoreStaticKnowledgeCheck(gameInstanceId, participantId, typedAnswers, staticKCQuestions)
@@ -2605,19 +2620,33 @@ export const getStudentPrepQuestions = onRequest(async (req, res) => {
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
   const ids = extractStudentIds(body, isEmulator, res)
   if (!ids) return
-  const { gameInstanceId } = ids
+  const { gameInstanceId, participantId } = ids
 
   try {
     const db = admin.firestore()
-    const snap = await db
-      .collection('game_instances').doc(gameInstanceId)
-      .collection('config').doc('main').get()
-    const cd = (snap.data() ?? {}) as Record<string, unknown>
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+    const [configSnap, participantSnap] = await Promise.all([
+      instanceRef.collection('config').doc('main').get(),
+      instanceRef.collection('participants').doc(participantId).get(),
+    ])
+
+    // Fail closed: role must be assigned before questions are delivered.
+    const participantRole = (participantSnap.data() ?? {}).role as 'Chris' | 'Kelly' | undefined
+    if (!participantRole) {
+      res.status(503).json({ error: 'Role not yet assigned.' })
+      return
+    }
+
+    const cd = (configSnap.data() ?? {}) as Record<string, unknown>
     const sellerName = typeof cd.seller_name === 'string' ? cd.seller_name : CONFIG_DEFAULTS.seller_name
     const buyerName  = typeof cd.buyer_name  === 'string' ? cd.buyer_name  : CONFIG_DEFAULTS.buyer_name
     const stored = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
     const visible = mergeWithSystemDefaults(stored)
-      .filter(q => !q.hidden && q.category !== 'debrief')
+      .filter(q =>
+        !q.hidden &&
+        q.category !== 'debrief' &&
+        (q.role_target === 'both' || q.role_target === participantRole),
+      )
       .sort((a, b) => a.order - b.order)
     // Strip answer key fields — correct_value, grading, and explanation must never reach the client pre-submission.
     const sanitized = visible.map(({ correct_value: _cv, grading: _g, explanation: _ex, ...rest }) => rest)
