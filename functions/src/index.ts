@@ -2173,7 +2173,7 @@ const DEFAULT_PREP_TEXT_QUESTIONS: PrepTextQuestion[] = [
       { value: 'lapse',   label: 'Let the registration lapse and give up the name' },
       { value: 'buy_alt', label: 'Buy WashingtonGrays.com instead' },
     ],
-    explanation: 'Correct: A. You already own the name; with no deal you simply keep it.',
+    explanation: 'You already own the name; with no deal you simply keep it.',
   },
   {
     field: 'kc_kelly_batna',
@@ -2187,7 +2187,7 @@ const DEFAULT_PREP_TEXT_QUESTIONS: PrepTextQuestion[] = [
       { value: 'icann',     label: 'Take the matter to ICANN to force a transfer' },
       { value: 'rebrand',   label: "Abandon the 'Grays' name and rebrand the team" },
     ],
-    explanation: "Correct: B. Per your instructions, WashingtonGrays.com is unregistered and available for $10 — your fallback if you can't get Grays.com.",
+    explanation: "Per your instructions, WashingtonGrays.com is unregistered and available for $10 — your fallback if you can't get Grays.com.",
   },
 
   // ── Knowledge-check Q3: own walk-away value ───────────────────────────────────
@@ -2203,7 +2203,7 @@ const DEFAULT_PREP_TEXT_QUESTIONS: PrepTextQuestion[] = [
       { value: 'biz_7_5m',    label: '$7.5 million — the most ever paid for a domain name (business.com)' },
       { value: 'reseller_35', label: '$35 — what middle-man ticket resellers pay for domains' },
     ],
-    explanation: 'Correct: A. You can replace the name for ~$25K, so you needn\'t accept less than roughly that — and ideally far more.',
+    explanation: "You can replace the name for ~$25K, so you needn't accept less than roughly that — and ideally far more.",
   },
   {
     field: 'kc_kelly_walkaway',
@@ -2217,7 +2217,7 @@ const DEFAULT_PREP_TEXT_QUESTIONS: PrepTextQuestion[] = [
       { value: 'stadium_440m', label: '$440 million — the cost of the new stadium' },
       { value: 'reseller_35', label: '$35 — what middle-man ticket resellers pay for domains' },
     ],
-    explanation: 'Correct: B. Your best alternative is WashingtonGrays.com; the ~$475K expected loss from using it is your ceiling.',
+    explanation: 'Your best alternative is WashingtonGrays.com; the ~$475K expected loss from using it is your ceiling.',
   },
 
   // ── Knowledge-check Q5: implied ZOPA ─────────────────────────────────────────
@@ -2233,7 +2233,7 @@ const DEFAULT_PREP_TEXT_QUESTIONS: PrepTextQuestion[] = [
       { value: 'kelly_max_to_7_5m',  label: "Your guess of Kelly's maximum up to $7.5 million" },
       { value: 'single_25k',         label: 'Exactly $25,000 — there is no range, just a single number' },
     ],
-    explanation: "Correct: A. As the seller, your reservation price is the bottom of the ZOPA; the buyer's reservation price — your estimate of Kelly's max — is the top. A deal is possible only if your guess of Kelly's max exceeds your ~$25K floor.",
+    explanation: "As the seller, your reservation price is the bottom of the ZOPA; the buyer's reservation price — your estimate of Kelly's max — is the top. A deal is possible only if your guess of Kelly's max exceeds your ~$25K floor.",
   },
   {
     field: 'kc_kelly_zopa',
@@ -2247,7 +2247,7 @@ const DEFAULT_PREP_TEXT_QUESTIONS: PrepTextQuestion[] = [
       { value: '475k_to_7_5m',         label: 'Your ~$475,000 maximum up to $7.5 million' },
       { value: 'single_475k',          label: 'Exactly $475,000 — there is no range, just a single number' },
     ],
-    explanation: "Correct: A. As the buyer, your reservation price is the top of the ZOPA; the seller's reservation price — your estimate of Chris's min — is the bottom. A deal is possible only if your ~$475K ceiling exceeds your guess of Chris's min.",
+    explanation: "As the buyer, your reservation price is the top of the ZOPA; the seller's reservation price — your estimate of Chris's min — is the bottom. A deal is possible only if your ~$475K ceiling exceeds your guess of Chris's min.",
   },
 ]
 
