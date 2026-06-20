@@ -72,15 +72,6 @@ export const getInfoUrls = (args: CallArgs) =>
 export const submitKnowledgeCheck = (args: CallArgs, answer: 'Chris' | 'Kelly') =>
   callFunction<KnowledgeCheckResult>('submitKnowledgeCheck', { ...args, answer })
 
-export type StaticKnowledgeCheckResult = {
-  ok: boolean
-  score: number
-  correctCount: number
-  totalCount: number
-}
-
-export const submitStaticKnowledgeCheck = (args: CallArgs, answers: Record<string, string>) =>
-  callFunction<StaticKnowledgeCheckResult>('submitStaticKnowledgeCheck', { ...args, answers })
 
 export type StaticKCQuestionResult = {
   ok: boolean

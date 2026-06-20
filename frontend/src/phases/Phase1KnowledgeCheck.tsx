@@ -3,7 +3,7 @@ import { doc, getDoc } from 'firebase/firestore'
 import { db } from '../firebase'
 import {
   type CallArgs, type MCOption,
-  submitKnowledgeCheck, submitStaticKnowledgeCheck,
+  submitKnowledgeCheck,
   submitStaticKnowledgeCheckQuestion,
   getStudentPrepQuestions,
 } from '../api'
@@ -161,9 +161,8 @@ export default function Phase1KnowledgeCheck({
       }
       if (result.correct) {
         if (staticQuestions.length === 0) {
-          // No concept questions — submit empty batch to record score.
-          const r = await submitStaticKnowledgeCheck(callArgs, {})
-          if (!r.ok) throw new Error('Failed to record score')
+          // Zero static questions — score was already finalized server-side by
+          // submitKnowledgeCheck when the role answer was correct.
           onCompleteRef.current()
         } else {
           setQuestionIndex(0)

@@ -11,7 +11,7 @@ import type { GameConfig, ParticipantRecord } from './finalize'
 import { suggestGroupForLatecomer } from './lateParticipant'
 import { assignRole as doAssignRole } from './assignRole'
 import { getInfoUrlsForParticipant } from './getInfoUrls'
-import { scoreKnowledgeCheck, scoreStaticKnowledgeCheck, calcKCScore } from './submitKnowledgeCheck'
+import { scoreKnowledgeCheck, calcKCScore } from './submitKnowledgeCheck'
 import { markPrepComplete } from './completePrep'
 import { markReadyConfirmed } from './confirmReady'
 import { generateAttendanceCode as doGenerateCode, verifyAttendanceCode as doVerifyCode } from './attendanceCode'
@@ -235,73 +235,6 @@ export const submitKnowledgeCheck = onRequest(async (req, res) => {
 })
 
 /**
- * Grades the static concept knowledge-check questions and writes the final
- * knowledge_check_score.  Must be called after submitKnowledgeCheck succeeds
- * (role gate passed).  Correct values are read server-side from config — the
- * client never receives them.
- *
- * Score = (1 + static_correct) / (1 + number_of_static_questions).
- * The role question contributes the leading 1 (always correct at this point).
- *
- * Request body: { token | _test, answers: { [field]: selectedValue, ... } }
- * Response: { ok, score, correctCount, totalCount }
- */
-export const submitStaticKnowledgeCheck = onRequest(async (req, res) => {
-  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
-  const body = req.body as Record<string, unknown>
-  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const ids = extractStudentIds(body, isEmulator, res)
-  if (!ids) return
-  const { gameInstanceId, participantId } = ids
-
-  const rawAnswers = body.answers
-  if (!rawAnswers || typeof rawAnswers !== 'object' || Array.isArray(rawAnswers)) {
-    res.status(400).json({ error: 'answers must be an object' })
-    return
-  }
-  const typedAnswers: Record<string, string> = {}
-  for (const [k, v] of Object.entries(rawAnswers as Record<string, unknown>)) {
-    if (typeof v !== 'string') { res.status(400).json({ error: `answers.${k} must be a string` }); return }
-    typedAnswers[k] = v
-  }
-
-  try {
-    const db = admin.firestore()
-    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
-    const [configSnap, participantSnap] = await Promise.all([
-      instanceRef.collection('config').doc('main').get(),
-      instanceRef.collection('participants').doc(participantId).get(),
-    ])
-
-    const participantRole = (participantSnap.data() ?? {}).role as 'Chris' | 'Kelly' | undefined
-    if (!participantRole) {
-      res.status(503).json({ error: 'Role not yet assigned.' })
-      return
-    }
-
-    const cd = (configSnap.data() ?? {}) as Record<string, unknown>
-    const stored = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
-    const allQuestions = mergeWithSystemDefaults(stored)
-    // Denominator is role-filtered: a student is only scored on questions they were shown.
-    const staticKCQuestions = allQuestions
-      .filter(q =>
-        q.category === 'knowledge_check' &&
-        q.grading === 'static' &&
-        !!q.correct_value &&
-        (q.role_target === 'both' || q.role_target === participantRole),
-      )
-      .map(q => ({ field: q.field, correct_value: q.correct_value! }))
-
-    const result = await scoreStaticKnowledgeCheck(gameInstanceId, participantId, typedAnswers, staticKCQuestions)
-    res.json({ ok: true, ...result })
-  } catch (err) {
-    const status = (err as { status?: number }).status ?? 500
-    const message = err instanceof Error ? err.message : 'Internal error'
-    res.status(status).json({ error: message })
-  }
-})
-
-/**
  * Grades a single static KC question for a participant.
  *
  * Idempotent per field: stores the result in kc_static_answers[field] on the
@@ -351,7 +284,7 @@ export const submitStaticKnowledgeCheckQuestion = onRequest(async (req, res) => 
     const stored = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
     const allQuestions = mergeWithSystemDefaults(stored)
 
-    // Role-filtered static KC questions — same filter as submitStaticKnowledgeCheck.
+    // Role-filtered static KC questions: category=knowledge_check, grading=static, role matches.
     const staticKCQuestions = allQuestions
       .filter(q =>
         q.category === 'knowledge_check' &&
