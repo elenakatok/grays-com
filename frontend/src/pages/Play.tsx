@@ -217,6 +217,8 @@ export default function Play() {
   if (phase.name === 'knowledge-check') {
     return (
       <Phase1KnowledgeCheck
+        participantId={sessionRef.current!.participantId}
+        gameInstanceId={sessionRef.current!.gameInstanceId}
         callArgs={callArgsRef.current!}
         onComplete={() => setPhase({ name: 'prep-questions' })}
       />

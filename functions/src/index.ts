@@ -11,7 +11,7 @@ import type { GameConfig, ParticipantRecord } from './finalize'
 import { suggestGroupForLatecomer } from './lateParticipant'
 import { assignRole as doAssignRole } from './assignRole'
 import { getInfoUrlsForParticipant } from './getInfoUrls'
-import { scoreKnowledgeCheck, scoreStaticKnowledgeCheck } from './submitKnowledgeCheck'
+import { scoreKnowledgeCheck, scoreStaticKnowledgeCheck, calcKCScore } from './submitKnowledgeCheck'
 import { markPrepComplete } from './completePrep'
 import { markReadyConfirmed } from './confirmReady'
 import { generateAttendanceCode as doGenerateCode, verifyAttendanceCode as doVerifyCode } from './attendanceCode'
@@ -264,6 +264,132 @@ export const submitStaticKnowledgeCheck = onRequest(async (req, res) => {
 
     const result = await scoreStaticKnowledgeCheck(gameInstanceId, participantId, typedAnswers, staticKCQuestions)
     res.json({ ok: true, ...result })
+  } catch (err) {
+    const status = (err as { status?: number }).status ?? 500
+    const message = err instanceof Error ? err.message : 'Internal error'
+    res.status(status).json({ error: message })
+  }
+})
+
+/**
+ * Grades a single static KC question for a participant.
+ *
+ * Idempotent per field: stores the result in kc_static_answers[field] on the
+ * participant doc and returns the stored value on repeat calls. After each
+ * successful write, checks whether all role-filtered static KC questions are
+ * now answered; if so, computes and writes knowledge_check_score in the same
+ * transaction.
+ *
+ * Request body: { token | _test, field: string, answer: string }
+ * Response: { ok: true, correct: boolean, explanation: string }
+ */
+export const submitStaticKnowledgeCheckQuestion = onRequest(async (req, res) => {
+  if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
+  const body = req.body as Record<string, unknown>
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+  const ids = extractStudentIds(body, isEmulator, res)
+  if (!ids) return
+  const { gameInstanceId, participantId } = ids
+
+  const { field, answer } = body
+  if (typeof field !== 'string' || !field) {
+    res.status(400).json({ error: 'field must be a non-empty string' })
+    return
+  }
+  if (typeof answer !== 'string' || !answer) {
+    res.status(400).json({ error: 'answer must be a non-empty string' })
+    return
+  }
+
+  try {
+    const db = admin.firestore()
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+
+    // Read participant role and config in parallel (both are stable at this point).
+    const [participantSnap, configSnap] = await Promise.all([
+      instanceRef.collection('participants').doc(participantId).get(),
+      instanceRef.collection('config').doc('main').get(),
+    ])
+
+    const participantRole = (participantSnap.data() ?? {}).role as 'Chris' | 'Kelly' | undefined
+    if (!participantRole) {
+      res.status(503).json({ error: 'Role not yet assigned.' })
+      return
+    }
+
+    const cd = (configSnap.data() ?? {}) as Record<string, unknown>
+    const stored = parsePrepTextQuestions(cd.prep_text_questions) ?? DEFAULT_PREP_TEXT_QUESTIONS
+    const allQuestions = mergeWithSystemDefaults(stored)
+
+    // Role-filtered static KC questions — same filter as submitStaticKnowledgeCheck.
+    const staticKCQuestions = allQuestions
+      .filter(q =>
+        q.category === 'knowledge_check' &&
+        q.grading === 'static' &&
+        !!q.correct_value &&
+        (q.role_target === 'both' || q.role_target === participantRole),
+      )
+
+    const question = staticKCQuestions.find(q => q.field === field)
+    if (!question) {
+      res.status(400).json({ error: `'${field}' is not a valid concept check question for your role.` })
+      return
+    }
+
+    const staticKCForScoring = staticKCQuestions.map(q => ({ field: q.field, correct_value: q.correct_value! }))
+    const participantRef = instanceRef.collection('participants').doc(participantId)
+
+    let resultCorrect: boolean
+    let resultExplanation: string
+
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(participantRef)
+      if (!snap.exists) {
+        throw Object.assign(new Error('Participant not found.'), { status: 404 })
+      }
+      const data = snap.data()!
+
+      // Require role question to be passed first.
+      if (data.knowledge_check_completed_at == null) {
+        throw Object.assign(new Error('Role question not yet completed.'), { status: 400 })
+      }
+
+      type KCAnswer = { answer: string; correct: boolean }
+      const existing = (data.kc_static_answers ?? {}) as Record<string, KCAnswer>
+
+      // Idempotent: already answered — return stored result.
+      if (existing[field] != null) {
+        resultCorrect = existing[field].correct
+        resultExplanation = question.explanation ?? ''
+        return
+      }
+
+      const correct = answer === question.correct_value!
+      resultCorrect = correct
+      resultExplanation = question.explanation ?? ''
+
+      // Build full answers map (existing + current) for potential score computation.
+      const allAnswersMap: Record<string, string> = {}
+      for (const [k, v] of Object.entries(existing)) {
+        allAnswersMap[k] = v.answer
+      }
+      allAnswersMap[field] = answer
+
+      const allAnswered = staticKCForScoring.every(q => q.field === field || existing[q.field] != null)
+
+      const updateData: Record<string, unknown> = {
+        [`kc_static_answers.${field}`]: { answer, correct, answered_at: FieldValue.serverTimestamp() },
+      }
+
+      if (allAnswered && data.knowledge_check_score == null) {
+        const { score } = calcKCScore(allAnswersMap, staticKCForScoring)
+        updateData.knowledge_check_score = score
+      }
+
+      tx.update(participantRef, updateData)
+    })
+
+    res.json({ ok: true, correct: resultCorrect!, explanation: resultExplanation! })
   } catch (err) {
     const status = (err as { status?: number }).status ?? 500
     const message = err instanceof Error ? err.message : 'Internal error'

@@ -87,6 +87,21 @@ export async function scoreKnowledgeCheck(
 }
 
 /**
+ * Pure KC score computation. The role question is counted as always-correct (the leading 1).
+ * Score = (1 + staticCorrect) / (1 + staticKCQuestions.length).
+ * Both scoreStaticKnowledgeCheck and submitStaticKnowledgeCheckQuestion use this to stay in sync.
+ */
+export function calcKCScore(
+  answers: Record<string, string>,
+  staticKCQuestions: Array<{ field: string; correct_value: string }>,
+): { score: number; correctCount: number; totalCount: number } {
+  const totalCount = 1 + staticKCQuestions.length
+  const staticCorrect = staticKCQuestions.filter(q => answers[q.field] === q.correct_value).length
+  const correctCount = 1 + staticCorrect
+  return { score: correctCount / totalCount, correctCount, totalCount }
+}
+
+/**
  * Grades the static concept questions and writes the final knowledge_check_score.
  *
  * The role question is counted as correct (the student must pass it to reach
@@ -119,18 +134,11 @@ export async function scoreStaticKnowledgeCheck(
     // Idempotent: already scored.
     if (data.knowledge_check_score != null) {
       const stored = data.knowledge_check_score as number
-      return {
-        score: stored,
-        correctCount: Math.round(stored * totalCount),
-        totalCount,
-      }
+      return { score: stored, correctCount: Math.round(stored * totalCount), totalCount }
     }
 
-    const staticCorrect = staticKCQuestions.filter(q => answers[q.field] === q.correct_value).length
-    const correctCount = 1 + staticCorrect  // role question always correct
-    const score = correctCount / totalCount
-
-    tx.update(participantRef, { knowledge_check_score: score })
-    return { score, correctCount, totalCount }
+    const result = calcKCScore(answers, staticKCQuestions)
+    tx.update(participantRef, { knowledge_check_score: result.score })
+    return result
   })
 }
