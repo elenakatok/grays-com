@@ -2730,6 +2730,27 @@ export const updateGameConfig = onRequest(async (req, res) => {
 
 // ── Student question delivery ───────────────────────────────────────────────
 
+/** djb2 hash → unsigned 32-bit integer. Used as a shuffle seed. */
+function djb2Hash(str: string): number {
+  let h = 5381
+  for (let i = 0; i < str.length; i++) {
+    h = ((h * 33) ^ str.charCodeAt(i)) >>> 0
+  }
+  return h
+}
+
+/** Fisher-Yates shuffle driven by an LCG seeded from `seed`. Returns a new array. */
+function seededShuffle<T>(arr: T[], seed: number): T[] {
+  const a = [...arr]
+  let s = seed >>> 0
+  for (let i = a.length - 1; i > 0; i--) {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0
+    const j = s % (i + 1)
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 /**
  * Returns the visible, ordered free-text prep questions for a student's session.
  * Hidden questions are excluded. Numeric prep questions are hardcoded in the
@@ -2788,7 +2809,14 @@ export const getStudentPrepQuestions = onRequest(async (req, res) => {
         }),
       }
     })
-    res.json({ ok: true, questions: withNames })
+    // Shuffle MC options deterministically per participant so answer position isn't a hint.
+    // Seed = djb2(participantId + ':' + field) — stable on reload for the same student.
+    const shuffled = withNames.map(q => {
+      if (q.type !== 'mc' || !q.options || q.options.length <= 1) return q
+      const seed = djb2Hash(`${participantId}:${q.field}`)
+      return { ...q, options: seededShuffle(q.options, seed) }
+    })
+    res.json({ ok: true, questions: shuffled })
   } catch (err) {
     console.error('getStudentPrepQuestions error:', err)
     res.status(500).json({ error: 'Internal error' })

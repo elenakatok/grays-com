@@ -968,6 +968,28 @@ export default function Settings() {
                                       + Add option
                                     </button>
                                   )}
+                                  {q.category === 'knowledge_check' && (
+                                    <div style={{ marginTop: '0.75rem' }}>
+                                      <label style={{ ...fieldLabel, marginBottom: '0.25rem' }}>
+                                        Explanation{' '}
+                                        <span style={{ fontWeight: 400, color: '#9ca3af' }}>
+                                          (shown to student after they submit this question)
+                                        </span>
+                                      </label>
+                                      <textarea
+                                        value={q.explanation ?? ''}
+                                        onChange={e => handlePrepEdit(idx, { explanation: e.target.value || undefined })}
+                                        disabled={prepDisabled}
+                                        rows={2}
+                                        placeholder="e.g. Correct: A. Because…"
+                                        style={{
+                                          ...inputStyle,
+                                          fontSize: '0.875rem', padding: '0.35rem 0.625rem',
+                                          resize: 'vertical', fontFamily: 'inherit',
+                                        }}
+                                      />
+                                    </div>
+                                  )}
                                 </>
                               ) : (
                                 <>
