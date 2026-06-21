@@ -485,36 +485,9 @@ export const generateAttendanceCode = corsOnRequest(async (req, res) => {
   }
 
   const body = req.body as Record<string, unknown>
-  let gameInstanceId: string
-
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-
-  if (isEmulator && body._dev != null) {
-    const dev = body._dev as Record<string, unknown>
-    if (typeof dev.game_instance_id !== 'string') {
-      res.status(400).json({ error: '_dev requires game_instance_id' })
-      return
-    }
-    gameInstanceId = dev.game_instance_id
-  } else {
-    if (typeof body.token !== 'string') {
-      res.status(400).json({ error: 'Missing token' })
-      return
-    }
-    let payload: ClassroomTokenPayload
-    try {
-      payload = verifyClassroomToken(body.token)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Invalid token'
-      res.status(401).json({ error: message })
-      return
-    }
-    if (payload.role !== 'instructor') {
-      res.status(403).json({ error: 'Instructor access required' })
-      return
-    }
-    gameInstanceId = payload.game_instance_id
-  }
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
+  if (gameInstanceId === null) return
 
   try {
     const code = await doGenerateCode(gameInstanceId)
@@ -579,36 +552,9 @@ export const triggerMatching = corsOnRequest(async (req, res) => {
   }
 
   const body = req.body as Record<string, unknown>
-  let gameInstanceId: string
-
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-
-  if (isEmulator && body._dev != null) {
-    const dev = body._dev as Record<string, unknown>
-    if (typeof dev.game_instance_id !== 'string') {
-      res.status(400).json({ error: '_dev requires game_instance_id' })
-      return
-    }
-    gameInstanceId = dev.game_instance_id
-  } else {
-    if (typeof body.token !== 'string') {
-      res.status(400).json({ error: 'Missing token' })
-      return
-    }
-    let payload: ClassroomTokenPayload
-    try {
-      payload = verifyClassroomToken(body.token)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Invalid token'
-      res.status(401).json({ error: message })
-      return
-    }
-    if (payload.role !== 'instructor') {
-      res.status(403).json({ error: 'Instructor access required' })
-      return
-    }
-    gameInstanceId = payload.game_instance_id
-  }
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
+  if (gameInstanceId === null) return
 
   try {
     const db = admin.firestore()
