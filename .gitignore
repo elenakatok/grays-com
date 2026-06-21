@@ -50,3 +50,6 @@ yarn-error.log*
 emulator-data/
 frontend/verify-gradebook.mjs
 functions/seed-gradebook.mjs
+
+# Logo/asset download archives — extracted files are committed individually
+frontend/public/files.zip
