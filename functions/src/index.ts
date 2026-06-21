@@ -31,7 +31,7 @@ function corsOnRequest(handler: (req: Request, res: Response) => Promise<void>) 
     if (CORS_ORIGINS.has(origin)) {
       res.set('Access-Control-Allow-Origin', origin)
       res.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
-      res.set('Access-Control-Allow-Headers', 'Content-Type')
+      res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
       res.set('Vary', 'Origin')
     }
     if (req.method === 'OPTIONS') {
