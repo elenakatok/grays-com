@@ -2080,6 +2080,20 @@ const CONFIG_DEFAULTS = {
   buyer_name: 'Kelly',
 } as const
 
+async function ensureConfigSeeded(instanceRef: FirebaseFirestore.DocumentReference): Promise<void> {
+  const configRef = instanceRef.collection('config').doc('main')
+  const snap = await configRef.get()
+  if (!snap.exists) {
+    await configRef.set({
+      reservation_price_chris: CONFIG_DEFAULTS.reservation_price_chris,
+      reservation_price_kelly: CONFIG_DEFAULTS.reservation_price_kelly,
+      public_info_url: '/role-info/public.pdf',
+      chris_info_url: '/role-info/seller.pdf',
+      kelly_info_url: '/role-info/buyer.pdf',
+    }, { merge: true })
+  }
+}
+
 // ── Prep questions (text, numeric, multiple-choice) ─────────────────────────
 
 export type MCOption = { value: string; label: string }
@@ -2440,6 +2454,8 @@ export const finalizeInstance = onCall(
     const db = admin.firestore()
     const instanceRef = db.collection('game_instances').doc(gameInstanceId)
 
+    await ensureConfigSeeded(instanceRef)
+
     const [configSnap, participantsSnap, groupsSnap] = await Promise.all([
       instanceRef.collection('config').doc('main').get(),
       instanceRef.collection('participants').get(),
@@ -2560,9 +2576,9 @@ export const getGameConfig = corsOnRequest(async (req, res) => {
 
   try {
     const db = admin.firestore()
-    const snap = await db
-      .collection('game_instances').doc(gameInstanceId)
-      .collection('config').doc('main').get()
+    const instanceRef = db.collection('game_instances').doc(gameInstanceId)
+    await ensureConfigSeeded(instanceRef)
+    const snap = await instanceRef.collection('config').doc('main').get()
     const cd = (snap.data() ?? {}) as Record<string, unknown>
     res.json({
       ok: true,
