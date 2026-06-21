@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto'
+import type { Request, Response } from 'express'
 import * as admin from 'firebase-admin'
 import { FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { onRequest, onCall, HttpsError } from 'firebase-functions/v2/https'
@@ -21,6 +22,25 @@ admin.initializeApp()
 // Public key is baked into classroomPublicKey.ts — no secret needed for auth.
 // CLASSROOM_CALLBACK_SECRET and CLASSROOM_ROSTER_URL are set via .env (emulator) / Secret Manager (prod).
 
+const CORS_ORIGINS = new Set(['https://grays.mygames.live'])
+
+function corsOnRequest(handler: (req: Request, res: Response) => Promise<void>) {
+  return onRequest(async (req, res) => {
+    const origin = req.headers.origin ?? ''
+    if (CORS_ORIGINS.has(origin)) {
+      res.set('Access-Control-Allow-Origin', origin)
+      res.set('Access-Control-Allow-Methods', 'POST, OPTIONS')
+      res.set('Access-Control-Allow-Headers', 'Content-Type')
+      res.set('Vary', 'Origin')
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).send('')
+      return
+    }
+    await handler(req, res)
+  })
+}
+
 export { reportResult, matchParticipants, computeZScores }
 export { pushResultsToClassroom } from './callbacks'
 
@@ -36,7 +56,7 @@ export { pushResultsToClassroom } from './callbacks'
  * The customToken lets the client sign in to Firebase Auth so Firestore security
  * rules can identify them by participant_id (request.auth.uid == participantId).
  */
-export const assignRole = onRequest(async (req, res) => {
+export const assignRole = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' })
     return
@@ -96,7 +116,7 @@ export const assignRole = onRequest(async (req, res) => {
  *
  * Response: { ok: true, role, public_info_url, private_info_url }
  */
-export const getInfoUrls = onRequest(async (req, res) => {
+export const getInfoUrls = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' })
     return
@@ -151,7 +171,7 @@ export const getInfoUrls = onRequest(async (req, res) => {
  * Request body: { token | _test, answer: "Chris" | "Kelly" }
  * Response: { ok, correct, alreadyCompleted, score, attempts }
  */
-export const submitKnowledgeCheck = onRequest(async (req, res) => {
+export const submitKnowledgeCheck = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' })
     return
@@ -246,7 +266,7 @@ export const submitKnowledgeCheck = onRequest(async (req, res) => {
  * Request body: { token | _test, field: string, answer: string }
  * Response: { ok: true, correct: boolean, explanation: string }
  */
-export const submitStaticKnowledgeCheckQuestion = onRequest(async (req, res) => {
+export const submitStaticKnowledgeCheckQuestion = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -369,7 +389,7 @@ export const submitStaticKnowledgeCheckQuestion = onRequest(async (req, res) => 
  * Request body: { token | _test }
  * Response: { ok: true }
  */
-export const completePrep = onRequest(async (req, res) => {
+export const completePrep = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' })
     return
@@ -420,7 +440,7 @@ export const completePrep = onRequest(async (req, res) => {
  * Verifies a classroom-issued JWT and returns the decoded participant payload.
  * Called by the frontend immediately after receiving the ?token= param.
  */
-export const verifyToken = onRequest(async (req, res) => {
+export const verifyToken = corsOnRequest(async (req, res) => {
   const token = req.body?.token as string | undefined
   if (!token) {
     res.status(400).json({ error: 'Missing token' })
@@ -442,7 +462,7 @@ export const verifyToken = onRequest(async (req, res) => {
  * Request body: { token | _test }
  * Response: { ok: true }
  */
-export const confirmReady = onRequest(async (req, res) => {
+export const confirmReady = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' })
     return
@@ -497,7 +517,7 @@ export const confirmReady = onRequest(async (req, res) => {
  * Request body (production): { token: "<instructor JWT>" }
  * Response: { ok: true, code: "ABCDE" }
  */
-export const generateAttendanceCode = onRequest(async (req, res) => {
+export const generateAttendanceCode = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' })
     return
@@ -551,7 +571,7 @@ export const generateAttendanceCode = onRequest(async (req, res) => {
  * Request body: { token | _test, code: "ABCDE" }
  * Response: { ok: true }
  */
-export const verifyAttendanceCode = onRequest(async (req, res) => {
+export const verifyAttendanceCode = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' })
     return
@@ -616,7 +636,7 @@ export const verifyAttendanceCode = onRequest(async (req, res) => {
  * Request body (production): { token: "<instructor JWT>" }
  * Response: { ok: true, groups: [...] }
  */
-export const triggerMatching = onRequest(async (req, res) => {
+export const triggerMatching = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' })
     return
@@ -1329,7 +1349,7 @@ export const seedSimulatedGame = onRequest(async (req, res) => {
  *
  * Request body: { token | _test }
  */
-export const startNegotiation = onRequest(async (req, res) => {
+export const startNegotiation = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -1378,7 +1398,7 @@ export const startNegotiation = onRequest(async (req, res) => {
  *
  * Request body: { token | _test, price: number | null }
  */
-export const submitLeadOutcome = onRequest(async (req, res) => {
+export const submitLeadOutcome = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -1444,7 +1464,7 @@ export const submitLeadOutcome = onRequest(async (req, res) => {
  *
  * Request body: { token | _test, confirmed: boolean }
  */
-export const submitConfirmation = onRequest(async (req, res) => {
+export const submitConfirmation = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -1541,7 +1561,7 @@ export const submitConfirmation = onRequest(async (req, res) => {
  *
  * Request body (emulator): { _dev: { game_instance_id }, group_id, price: number | null }
  */
-export const submitInstructorOutcome = onRequest(async (req, res) => {
+export const submitInstructorOutcome = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -1578,7 +1598,7 @@ export const submitInstructorOutcome = onRequest(async (req, res) => {
  *
  * Request body (emulator): { _test: { participant_id, game_instance_id }, initial_offer: number }
  */
-export const submitDebriefOffer = onRequest(async (req, res) => {
+export const submitDebriefOffer = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -1638,7 +1658,7 @@ export const submitDebriefOffer = onRequest(async (req, res) => {
  *
  * Request body (emulator): { _dev: { game_instance_id } }
  */
-export const getGroupStatuses = onRequest(async (req, res) => {
+export const getGroupStatuses = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -1678,7 +1698,7 @@ export const getGroupStatuses = onRequest(async (req, res) => {
  * Request body: { _dev: { game_instance_id } }
  * Response: { ok, groups: GroupOutcome[], config: { reservation_price_chris, reservation_price_kelly } }
  */
-export const getReportData = onRequest(async (req, res) => {
+export const getReportData = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -1762,7 +1782,7 @@ export const getReportData = onRequest(async (req, res) => {
  * Request body (emulator): { _dev: { game_instance_id } }
  * Response: { ok, participants: RosterEntry[], groups: RosterGroup[] }
  */
-export const getRoster = onRequest(async (req, res) => {
+export const getRoster = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -1814,7 +1834,7 @@ export const getRoster = onRequest(async (req, res) => {
  * Called automatically by the instructor dashboard when getUnmatchedParticipants
  * returns a participant with suggested_group: null.
  */
-export const markParticipantLate = onRequest(async (req, res) => {
+export const markParticipantLate = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -1850,7 +1870,7 @@ export const markParticipantLate = onRequest(async (req, res) => {
  * Request body (emulator): { _dev: { game_instance_id } }
  * Response: { ok, unmatched: [{ participant_id, display_name, role, suggested_group }] }
  */
-export const getUnmatchedParticipants = onRequest(async (req, res) => {
+export const getUnmatchedParticipants = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -1927,7 +1947,7 @@ export const getUnmatchedParticipants = onRequest(async (req, res) => {
  * Request body (emulator): { _dev: { game_instance_id }, participant_id, group_id }
  * Response: { ok, participant_id, group_id, composition } or error
  */
-export const addLateParticipant = onRequest(async (req, res) => {
+export const addLateParticipant = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -2531,7 +2551,7 @@ export const finalizeInstance = onCall(
  *
  * Request body (emulator): { _dev: { game_instance_id } }
  */
-export const getGameConfig = onRequest(async (req, res) => {
+export const getGameConfig = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -2584,7 +2604,7 @@ export const getGameConfig = onRequest(async (req, res) => {
  * Request body (emulator): { _dev: { game_instance_id }, ...fields }
  * Response: full current config (all five fields) after the write.
  */
-export const updateGameConfig = onRequest(async (req, res) => {
+export const updateGameConfig = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -2724,7 +2744,7 @@ function seededShuffle<T>(arr: T[], seed: number): T[] {
  * Request body: { token | _test: { participant_id, game_instance_id } }
  * Response: { ok, questions: PrepTextQuestion[] }
  */
-export const getStudentPrepQuestions = onRequest(async (req, res) => {
+export const getStudentPrepQuestions = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
@@ -2795,9 +2815,9 @@ export const getStudentPrepQuestions = onRequest(async (req, res) => {
 // existing role-less rows. No deletions.
 //
 // Request body: { token } | { _dev: { game_instance_id } }
-// Response: { ok, synced, skipped }
+// Response: { ok, synced, skipped } — force-rebuild 2026-06-20
 
-export const syncRoster = onRequest(async (req, res) => {
+export const syncRoster = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
