@@ -2551,11 +2551,24 @@ export const finalizeInstance = onCall(
         { raw_score: r.raw_score, normalized_score: r.normalized_score, finalized_at: finalizedAt },
       )
     }
+
+    // Second pass: enrolled-but-never-joined students (no Chris/Kelly role).
+    // Excluded from z-score math; write the -2 floor marker + finalized_at so the push includes them.
+    let noRoleCount = 0
+    for (const doc of participantsSnap.docs) {
+      const role = doc.data().role
+      if (role === 'Chris' || role === 'Kelly') continue
+      batch.update(
+        instanceRef.collection('participants').doc(doc.id),
+        { raw_score: null, normalized_score: -2, finalized_at: finalizedAt },
+      )
+      noRoleCount++
+    }
     await batch.commit()
 
     const chrisCount = results.filter((r) => r.role === 'Chris').length
     const kellyCount = results.filter((r) => r.role === 'Kelly').length
-    return { ok: true, scored: { Chris: chrisCount, Kelly: kellyCount, total: results.length } }
+    return { ok: true, scored: { Chris: chrisCount, Kelly: kellyCount, total: results.length + noRoleCount } }
   },
 )
 

@@ -111,15 +111,15 @@ export const pushResultsToClassroom = onCall(
       const d = doc.data()
       // Only push participants the finalize step has already written
       if (d.finalized_at == null) continue
-      if (d.role !== 'Chris' && d.role !== 'Kelly') continue
+      if (d.role !== 'Chris' && d.role !== 'Kelly' && d.role != null) continue
 
-      // Derive status from stored data: finalize sets raw_score=null for no_show
+      // Derive status from stored data: finalize sets raw_score=null for no_show/no-role
       const status: GameResult['status'] = d.raw_score != null ? 'completed' : 'no_show'
       records.push({
         game_instance_id: gameInstanceId,
         participant_id: doc.id,
         status,
-        role: d.role as string,
+        role: (d.role ?? null) as string | null,
         normalized_score: (d.normalized_score ?? null) as number | null,
         knowledge_check_score: (d.knowledge_check_score ?? null) as number | null,
         details: (d.details ?? {}) as Record<string, unknown>,
