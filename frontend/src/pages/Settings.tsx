@@ -6,6 +6,7 @@ import {
   type InstructorCallArgs, type PrepTextQuestion, type MCOption,
 } from '../api'
 import { parsePrice } from '../utils/parsePrice'
+import GameHeader from '../components/GameHeader'
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
@@ -488,6 +489,7 @@ export default function Settings() {
   }
   return (
     <div style={{ fontFamily: 'sans-serif', minHeight: '100vh', background: '#f8fafc' }}>
+      <GameHeader />
 
       {/* ── Top bar ────────────────────────────────────────────── */}
       <div style={{ background: '#fff', borderBottom: '1px solid #e0e0e0', padding: '0.625rem 2rem' }}>

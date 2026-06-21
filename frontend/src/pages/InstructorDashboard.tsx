@@ -22,6 +22,7 @@ import {
 import { parsePrice } from '../utils/parsePrice'
 import { rtdb } from '../firebase'
 import RosterTable from './RosterTable'
+import GameHeader from '../components/GameHeader'
 
 const USD = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
 
@@ -416,11 +417,12 @@ export default function InstructorDashboard() {
   }
   return (
     <div style={{ fontFamily: 'sans-serif' }}>
+      <GameHeader />
 
       {/* ── Sticky action bar ─────────────────────────────────────── */}
       <div style={{
         position: 'sticky',
-        top: 0,
+        top: 48,
         zIndex: 10,
         background: '#fff',
         borderBottom: '1px solid #e0e0e0',

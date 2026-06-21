@@ -17,6 +17,7 @@ import Phase2AttendanceCode from '../phases/Phase2AttendanceCode'
 import Phase2WaitingRoom from '../phases/Phase2WaitingRoom'
 import Phase2GroupReveal from '../phases/Phase2GroupReveal'
 import Phase2OffPlatformHolding from '../phases/Phase2OffPlatformHolding'
+import GameHeader from '../components/GameHeader'
 
 /**
  * Entry point for classroom-launched (and emulator dev-mode) sessions.
@@ -194,6 +195,7 @@ export default function Play() {
     }
   }, [token, devParticipantId, devGameInstanceId])
 
+  function content(): JSX.Element {
   if (phase.name === 'loading') {
     return (
       <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto' }}>
@@ -394,5 +396,13 @@ export default function Play() {
       privateUrl={phase.privateUrl}
       onContinue={() => setPhase({ name: 'knowledge-check' })}
     />
+  )
+  } // end content()
+
+  return (
+    <>
+      <GameHeader />
+      {content()}
+    </>
   )
 }

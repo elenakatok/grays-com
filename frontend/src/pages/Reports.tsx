@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getReportData, CLASSROOM_URL, isAuthError, type ReportGroup, type ReportConfig, type ReportParticipant, type InstructorCallArgs } from '../api'
+import GameHeader from '../components/GameHeader'
 
 // ── Formatting ────────────────────────────────────────────────────────────────
 
@@ -1248,6 +1249,7 @@ export default function Reports() {
   }
   return (
     <div style={{ fontFamily: 'sans-serif', minHeight: '100vh', background: '#f8fafc' }}>
+      <GameHeader />
 
       {/* ── Top bar ───────────────────────────────────────────────── */}
       <div style={{
