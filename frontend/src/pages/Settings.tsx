@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { signInWithCustomToken } from 'firebase/auth'
 import {
-  getGameConfig, updateGameConfig,
+  getGameConfig, updateGameConfig, getInstructorSession,
   CLASSROOM_URL, isAuthError,
-  type InstructorCallArgs, type PrepTextQuestion, type MCOption,
+  type PrepTextQuestion, type MCOption,
 } from '../api'
+import { auth } from '../firebase'
 import { parsePrice } from '../utils/parsePrice'
 import GameHeader from '../components/GameHeader'
 
@@ -89,11 +91,32 @@ export default function Settings() {
   const tokenParam          = searchParams.get('token')
   const gameInstanceIdParam = searchParams.get('game_instance_id')
 
-  const callArgs = useMemo<InstructorCallArgs | null>(() => {
-    if (devGameInstanceId) return { _dev: { game_instance_id: devGameInstanceId } }
-    if (tokenParam) return { token: tokenParam }
-    return null
-  }, [devGameInstanceId, tokenParam])
+  const [sessionReady, setSessionReady] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const establish = async () => {
+      if (auth.currentUser) { setSessionReady(true); return }
+      const args = devGameInstanceId
+        ? { _dev: { game_instance_id: devGameInstanceId } }
+        : tokenParam
+          ? { token: tokenParam }
+          : null
+      if (!args) return
+      try {
+        const { customToken } = await getInstructorSession(args)
+        if (cancelled) return
+        await signInWithCustomToken(auth, customToken)
+        if (cancelled) return
+        setSessionReady(true)
+      } catch (err) {
+        if (cancelled) return
+        setAuthError(err instanceof Error ? err.message : 'Failed to establish session.')
+      }
+    }
+    void establish()
+    return () => { cancelled = true }
+  }, [devGameInstanceId, tokenParam]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const makeLink = (base: string): string => {
     if (devGameInstanceId) return `${base}?_dev_game_instance_id=${encodeURIComponent(devGameInstanceId)}`
@@ -156,10 +179,10 @@ export default function Settings() {
 
   // ── Load config on mount ──────────────────────────────────────────
   useEffect(() => {
-    if (!callArgs) return
+    if (!sessionReady) return
     setLoading(true)
     setLoadError(null)
-    getGameConfig(callArgs)
+    getGameConfig()
       .then((cfg) => {
         setSellerNameRaw(cfg.seller_name)
         setBuyerNameRaw(cfg.buyer_name)
@@ -186,7 +209,7 @@ export default function Settings() {
         }
         setLoading(false)
       })
-  }, [callArgs])
+  }, [sessionReady])
 
   // ── Shared helper — apply full config result ──────────────────────
   const applyConfigResult = (cfg: Awaited<ReturnType<typeof getGameConfig>>) => {
@@ -235,11 +258,11 @@ export default function Settings() {
   }
 
   const doSavePrices = (chris: number, kelly: number) => {
-    if (!callArgs) return
+    if (!sessionReady) return
     setSaving(true); setSaveError(null)
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
     setSavedAt(null)
-    updateGameConfig(callArgs, { reservation_price_chris: chris, reservation_price_kelly: kelly })
+    updateGameConfig({ reservation_price_chris: chris, reservation_price_kelly: kelly })
       .then(cfg => { setSaving(false); applyConfigResult(cfg); setSavedAt(new Date()) })
       .catch((err: unknown) => { setSaving(false); setSaveError(err instanceof Error ? err.message : 'Save failed — please try again.') })
   }
@@ -252,11 +275,11 @@ export default function Settings() {
     if (pe)  { setUrlSaveError(`Public info URL: ${pe}`);  return }
     if (ce)  { setUrlSaveError(`${savedSellerName ?? 'Seller'} info URL: ${ce}`);  return }
     if (ke)  { setUrlSaveError(`${savedBuyerName  ?? 'Buyer'}  info URL: ${ke}`);  return }
-    if (!callArgs) return
+    if (!sessionReady) return
     setUrlSaving(true)
     if (urlSavedTimerRef.current) clearTimeout(urlSavedTimerRef.current)
     setUrlSavedAt(null)
-    updateGameConfig(callArgs, { public_info_url: publicUrl.trim(), chris_info_url: chrisUrl.trim(), kelly_info_url: kellyUrl.trim() })
+    updateGameConfig({ public_info_url: publicUrl.trim(), chris_info_url: chrisUrl.trim(), kelly_info_url: kellyUrl.trim() })
       .then(cfg => { setUrlSaving(false); applyConfigResult(cfg); setUrlSavedAt(new Date()) })
       .catch((err: unknown) => { setUrlSaving(false); setUrlSaveError(err instanceof Error ? err.message : 'Save failed — please try again.') })
   }
@@ -269,11 +292,11 @@ export default function Settings() {
     const bn = buyerNameRaw.trim()
     if (!sn) { setNamesSaveError('Seller name cannot be blank.'); return }
     if (!bn) { setNamesSaveError('Buyer name cannot be blank.'); return }
-    if (!callArgs) return
+    if (!sessionReady) return
     setNamesSaving(true)
     if (namesSavedTimerRef.current) clearTimeout(namesSavedTimerRef.current)
     setNamesSavedAt(null)
-    updateGameConfig(callArgs, { seller_name: sn, buyer_name: bn })
+    updateGameConfig({ seller_name: sn, buyer_name: bn })
       .then(cfg => { setNamesSaving(false); applyConfigResult(cfg); setNamesSavedAt(new Date()) })
       .catch((err: unknown) => { setNamesSaving(false); setNamesSaveError(err instanceof Error ? err.message : 'Save failed — please try again.') })
   }
@@ -400,11 +423,11 @@ export default function Settings() {
       setPrepSaveError(`Question ${emptyPrompt + 1} has no prompt text — fill it in or hide it.`)
       return
     }
-    if (!callArgs) return
+    if (!sessionReady) return
     setPrepSaving(true)
     setPrepSavedAt(null)
     const normalised = normaliseOrders(prepQuestions)
-    updateGameConfig(callArgs, { prep_text_questions: normalised })
+    updateGameConfig({ prep_text_questions: normalised })
       .then(cfg => {
         setPrepSaving(false)
         const saved = [...cfg.prep_text_questions].sort((a, b) => a.order - b.order)
@@ -461,10 +484,10 @@ export default function Settings() {
     padding: '1.25rem 1rem', borderTop: '1px solid #e2e8f0',
   }
 
-  const disabled     = saving       || !callArgs
-  const urlDisabled  = urlSaving    || !callArgs
-  const prepDisabled = prepSaving   || !callArgs
-  const namesDisabled = namesSaving || !callArgs
+  const disabled     = saving       || !sessionReady
+  const urlDisabled  = urlSaving    || !sessionReady
+  const prepDisabled = prepSaving   || !sessionReady
+  const namesDisabled = namesSaving || !sessionReady
 
   // ── Render ────────────────────────────────────────────────────────
 
@@ -504,7 +527,7 @@ export default function Settings() {
       {/* ── Main ───────────────────────────────────────────────── */}
       <main style={{ maxWidth: 760, margin: '0 auto', padding: '2rem' }}>
 
-        {!callArgs && <p style={{ color: '#c00' }}>No valid launch token. Open this page from the classroom or dashboard.</p>}
+        {!gameInstanceIdParam && !devGameInstanceId && <p style={{ color: '#c00' }}>No valid launch token. Open this page from the classroom or dashboard.</p>}
         {loading && <p style={{ color: '#64748b' }}>Loading…</p>}
         {loadError && <p style={{ color: '#dc2626' }}>{loadError}</p>}
 

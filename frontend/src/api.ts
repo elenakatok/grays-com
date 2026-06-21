@@ -5,6 +5,10 @@ const FUNCTIONS_BASE = import.meta.env.DEV
   ? 'http://127.0.0.1:5004/grays-mygames-live/us-central1'
   : 'https://us-central1-grays-mygames-live.cloudfunctions.net'
 
+const INSTRUCTOR_SESSION_URL = import.meta.env.DEV
+  ? `${FUNCTIONS_BASE}/getInstructorSession`
+  : 'https://getinstructorsession-f7ruj65soa-uc.a.run.app'
+
 export type TestArgs = { _test: { participant_id: string; game_instance_id: string } }
 export type TokenArgs = { token: string }
 export type CallArgs = TokenArgs | TestArgs
@@ -82,6 +86,17 @@ export type KnowledgeCheckResult = {
   attempts: number
 }
 
+export async function getInstructorSession(args: InstructorCallArgs): Promise<{ ok: boolean; customToken: string }> {
+  const res = await fetch(INSTRUCTOR_SESSION_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  })
+  const data = await res.json() as { ok: boolean; customToken?: string; error?: string }
+  if (!res.ok) throw new Error(`${data.error ?? 'getInstructorSession failed'} (${res.status})`)
+  return data as { ok: boolean; customToken: string }
+}
+
 export const assignRole = (args: CallArgs) =>
   callFunction<AssignRoleResult>('assignRole', args)
 
@@ -107,8 +122,8 @@ export const completePrep = (args: CallArgs) =>
 export const confirmReady = (args: CallArgs) =>
   callFunction<{ ok: boolean }>('confirmReady', args)
 
-export const generateAttendanceCode = (args: InstructorCallArgs) =>
-  callFunction<{ ok: boolean; code: string }>('generateAttendanceCode', args)
+export const generateAttendanceCode = () =>
+  callFunctionWithSession<{ ok: boolean; code: string }>('generateAttendanceCode', {})
 
 export const verifyAttendanceCode = (args: CallArgs, code: string) =>
   callFunction<{ ok: boolean }>('verifyAttendanceCode', { ...args, code })
@@ -122,10 +137,10 @@ export type MatchGroupResult = {
   status: string
 }
 
-export const triggerMatching = (args: InstructorCallArgs) =>
-  callFunction<{ ok: boolean; groups: MatchGroupResult[]; alreadyMatched?: boolean }>(
+export const triggerMatching = () =>
+  callFunctionWithSession<{ ok: boolean; groups: MatchGroupResult[]; alreadyMatched?: boolean }>(
     'triggerMatching',
-    args,
+    {},
   )
 
 // ── Outcome reporting ──────────────────────────────────────────────────────
@@ -161,20 +176,15 @@ export const submitDebriefOffer = (args: CallArgs, initialOffer: number) =>
   callFunction<{ ok: boolean }>('submitDebriefOffer', { ...args, initial_offer: initialOffer })
 
 /** Instructor manually settles a deadlocked group. */
-export const submitInstructorOutcome = (
-  args: InstructorCallArgs,
-  groupId: string,
-  price: number | null,
-) =>
-  callFunction<{ ok: boolean }>('submitInstructorOutcome', {
-    ...args,
+export const submitInstructorOutcome = (groupId: string, price: number | null) =>
+  callFunctionWithSession<{ ok: boolean }>('submitInstructorOutcome', {
     group_id: groupId,
     price,
   })
 
 /** Returns all groups with current status — for the instructor dashboard. */
-export const getGroupStatuses = (args: InstructorCallArgs) =>
-  callFunction<{ ok: boolean; groups: GroupStatusResult[] }>('getGroupStatuses', args)
+export const getGroupStatuses = () =>
+  callFunctionWithSession<{ ok: boolean; groups: GroupStatusResult[] }>('getGroupStatuses', {})
 
 export type RosterParticipant = {
   participant_id: string
@@ -192,10 +202,10 @@ export type RosterGroup = {
 }
 
 /** Returns all enrolled participants + group statuses for the instructor roster. */
-export const getRoster = (args: InstructorCallArgs) =>
-  callFunction<{ ok: boolean; participants: RosterParticipant[]; groups: RosterGroup[]; session_live: boolean }>(
+export const getRoster = () =>
+  callFunctionWithSession<{ ok: boolean; participants: RosterParticipant[]; groups: RosterGroup[]; session_live: boolean }>(
     'getRoster',
-    args,
+    {},
   )
 
 // ── Shared question type ──────────────────────────────────────────────────────
@@ -262,8 +272,8 @@ export type ReportParticipant = {
 }
 
 /** Returns group outcomes, game config, and per-participant prep answers for the Reports page. */
-export const getReportData = (args: InstructorCallArgs) =>
-  callFunction<{ ok: boolean; groups: ReportGroup[]; config: ReportConfig; participants: ReportParticipant[] }>('getReportData', args)
+export const getReportData = () =>
+  callFunctionWithSession<{ ok: boolean; groups: ReportGroup[]; config: ReportConfig; participants: ReportParticipant[] }>('getReportData', {})
 
 // ── Settings page — game config ────────────────────────────────────────────
 
@@ -280,19 +290,16 @@ export type GameConfigResult = {
 }
 
 /** Reads the full game config from config/main for the Settings page. */
-export const getGameConfig = (args: InstructorCallArgs) =>
-  callFunction<GameConfigResult>('getGameConfig', args)
+export const getGameConfig = () =>
+  callFunctionWithSession<GameConfigResult>('getGameConfig', {})
 
 /**
  * Merge-writes any subset of config/main fields; only the keys present in
  * `fields` are written — all other fields on the doc are left untouched.
  * The response is the full current config after the write.
  */
-export const updateGameConfig = (
-  args: InstructorCallArgs,
-  fields: Partial<Omit<GameConfigResult, 'ok'>>,
-) =>
-  callFunction<GameConfigResult>('updateGameConfig', { ...args, ...fields })
+export const updateGameConfig = (fields: Partial<Omit<GameConfigResult, 'ok'>>) =>
+  callFunctionWithSession<GameConfigResult>('updateGameConfig', fields)
 
 // ── Student question delivery ─────────────────────────────────────────────────
 
@@ -303,8 +310,8 @@ export const getStudentPrepQuestions = (args: CallArgs) =>
 // ── Roster pre-population ─────────────────────────────────────────────────────
 
 /** Pre-populates participant docs from classroom enrollment. Fire-and-forget on instructor launch. */
-export const syncRoster = (args: InstructorCallArgs) =>
-  callFunction<{ ok: boolean; synced: number; skipped: number }>('syncRoster', args)
+export const syncRoster = () =>
+  callFunctionWithSession<{ ok: boolean; synced: number; skipped: number }>('syncRoster', {})
 
 // ── Late-participant helpers ───────────────────────────────────────────────────
 
@@ -323,22 +330,18 @@ export type UnmatchedParticipant = {
 }
 
 /** Returns present, attendance-verified participants who are not yet in any group. */
-export const getUnmatchedParticipants = (args: InstructorCallArgs) =>
-  callFunction<{ ok: boolean; unmatched: UnmatchedParticipant[] }>('getUnmatchedParticipants', args)
+export const getUnmatchedParticipants = () =>
+  callFunctionWithSession<{ ok: boolean; unmatched: UnmatchedParticipant[] }>('getUnmatchedParticipants', {})
 
 /** Marks a present-but-unplaceable participant as "Late" (raw_score/normalized_score = null). */
-export const markParticipantLate = (args: InstructorCallArgs, participantId: string) =>
-  callFunction<{ ok: boolean }>('markParticipantLate', { ...args, participant_id: participantId })
+export const markParticipantLate = (participantId: string) =>
+  callFunctionWithSession<{ ok: boolean }>('markParticipantLate', { participant_id: participantId })
 
 /** Adds a late participant to a specific group (server re-checks eligibility). */
-export const addLateParticipant = (
-  args: InstructorCallArgs,
-  participantId: string,
-  groupId: string,
-) =>
-  callFunction<{ ok: boolean; composition?: string; already_matched?: boolean }>(
+export const addLateParticipant = (participantId: string, groupId: string) =>
+  callFunctionWithSession<{ ok: boolean; composition?: string; already_matched?: boolean }>(
     'addLateParticipant',
-    { ...args, participant_id: participantId, group_id: groupId },
+    { participant_id: participantId, group_id: groupId },
   )
 
 // ── onCall functions (finalize + push) ────────────────────────────────────────
@@ -357,20 +360,13 @@ export type PushResult = {
   failed: Array<{ participant_id: string; reason: string }>
 }
 
-const _finalizeInstance = httpsCallable<
-  InstructorCallArgs,
-  FinalizeResult
->(functions, 'finalizeInstance')
-
-const _pushResultsToClassroom = httpsCallable<
-  InstructorCallArgs,
-  PushResult
->(functions, 'pushResultsToClassroom')
+const _finalizeInstance = httpsCallable<Record<string, never>, FinalizeResult>(functions, 'finalizeInstance')
+const _pushResultsToClassroom = httpsCallable<Record<string, never>, PushResult>(functions, 'pushResultsToClassroom')
 
 /** Computes and writes z-scores for all participants in a game instance. */
-export const finalizeInstance = (args: InstructorCallArgs): Promise<FinalizeResult> =>
-  _finalizeInstance(args).then((r) => r.data)
+export const finalizeInstance = (): Promise<FinalizeResult> =>
+  _finalizeInstance({}).then((r) => r.data)
 
 /** Pushes finalized scores from Firestore to the classroom gradebook. */
-export const pushResultsToClassroom = (args: InstructorCallArgs): Promise<PushResult> =>
-  _pushResultsToClassroom(args).then((r) => r.data)
+export const pushResultsToClassroom = (): Promise<PushResult> =>
+  _pushResultsToClassroom({}).then((r) => r.data)

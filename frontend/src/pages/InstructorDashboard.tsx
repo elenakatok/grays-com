@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router-dom'
+import { signInWithCustomToken } from 'firebase/auth'
 import { ref, onValue } from 'firebase/database'
 import {
   generateAttendanceCode,
@@ -13,14 +14,14 @@ import {
   pushResultsToClassroom,
   syncRoster,
   getGameConfig,
+  getInstructorSession,
   CLASSROOM_URL,
   isAuthError,
-  type InstructorCallArgs,
   type GroupStatusResult,
   type UnmatchedParticipant,
 } from '../api'
 import { parsePrice } from '../utils/parsePrice'
-import { rtdb } from '../firebase'
+import { rtdb, auth } from '../firebase'
 import RosterTable from './RosterTable'
 import GameHeader from '../components/GameHeader'
 
@@ -79,15 +80,35 @@ export default function InstructorDashboard() {
   const tokenParam          = searchParams.get('token')
   const gameInstanceIdParam = searchParams.get('game_instance_id')
 
-  // Dev shortcut takes precedence; token path is the production entry.
-  const callArgs = useMemo<InstructorCallArgs | null>(() => {
-    if (devGameInstanceId) return { _dev: { game_instance_id: devGameInstanceId } }
-    if (tokenParam) return { token: tokenParam }
-    return null
-  }, [devGameInstanceId, tokenParam])
-
-  // String ID used for RTDB paths and httpsCallable functions.
+  // String ID used for RTDB paths.
   const gameInstanceId = devGameInstanceId ?? gameInstanceIdParam
+
+  const [sessionReady, setSessionReady] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const establish = async () => {
+      if (auth.currentUser) { setSessionReady(true); return }
+      const args = devGameInstanceId
+        ? { _dev: { game_instance_id: devGameInstanceId } }
+        : tokenParam
+          ? { token: tokenParam }
+          : null
+      if (!args) return
+      try {
+        const { customToken } = await getInstructorSession(args)
+        if (cancelled) return
+        await signInWithCustomToken(auth, customToken)
+        if (cancelled) return
+        setSessionReady(true)
+      } catch (err) {
+        if (cancelled) return
+        setAuthError(err instanceof Error ? err.message : 'Failed to establish session.')
+      }
+    }
+    void establish()
+    return () => { cancelled = true }
+  }, [devGameInstanceId, tokenParam]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Builds a nav link that carries the current launch context forward.
   const makeLink = (base: string): string => {
@@ -109,13 +130,13 @@ export default function InstructorDashboard() {
   const [codeError, setCodeError] = useState<string | null>(null)
 
   const handleGenerate = () => {
-    if (!callArgs) {
+    if (!sessionReady) {
       setCodeError('No valid launch token.')
       return
     }
     setGenerating(true)
     setCodeError(null)
-    generateAttendanceCode(callArgs)
+    generateAttendanceCode()
       .then((result) => { setCode(result.code); setGenerating(false) })
       .catch((err: unknown) => {
         setCodeError(err instanceof Error ? err.message : 'Failed to generate code.')
@@ -172,11 +193,11 @@ export default function InstructorDashboard() {
   const [matchError, setMatchError] = useState<string | null>(null)
 
   const handleMatch = () => {
-    if (!callArgs) return
+    if (!sessionReady) return
     setMatching(true)
     setMatchError(null)
-    triggerMatching(callArgs)
-      .then(() => { setMatching(false); loadGroupStatuses(callArgs) })
+    triggerMatching()
+      .then(() => { setMatching(false); loadGroupStatuses() })
       .catch((err: unknown) => {
         setMatchError(err instanceof Error ? err.message : 'Matching failed.')
         setMatching(false)
@@ -187,26 +208,26 @@ export default function InstructorDashboard() {
   const [groupStatuses, setGroupStatuses] = useState<GroupStatusResult[] | null>(null)
   const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const loadGroupStatuses = (args: InstructorCallArgs) => {
-    getGroupStatuses(args)
+  const loadGroupStatuses = () => {
+    getGroupStatuses()
       .then((r) => setGroupStatuses(r.groups.length > 0 ? r.groups : null))
       .catch(() => {/* silently ignore */})
   }
 
   useEffect(() => {
-    if (!callArgs) return
+    if (!sessionReady) return
     // Fire-and-forget: pre-populate roster from classroom enrollment on launch.
     // Errors are non-fatal — the roster still shows self-joined students without it.
-    syncRoster(callArgs).catch(() => {/* ignore — roster works without pre-pop */})
-    getGameConfig(callArgs)
+    syncRoster().catch(() => {/* ignore — roster works without pre-pop */})
+    getGameConfig()
       .then(cfg => { setSellerName(cfg.seller_name); setBuyerName(cfg.buyer_name) })
       .catch(() => {/* non-fatal — dashboard still works with defaults */})
-    getGroupStatuses(callArgs)
+    getGroupStatuses()
       .then((r) => setGroupStatuses(r.groups.length > 0 ? r.groups : null))
       .catch((err: unknown) => {
         if (isAuthError(err)) setAuthError(err instanceof Error ? err.message : 'Authentication failed.')
       })
-  }, [callArgs])
+  }, [sessionReady])
 
   // ── Latecomers ────────────────────────────────────────────────────
   const [unmatchedParticipants, setUnmatchedParticipants] = useState<UnmatchedParticipant[] | null>(null)
@@ -215,21 +236,21 @@ export default function InstructorDashboard() {
   // Ref tracks in-flight markParticipantLate calls to prevent duplicate auto-marks.
   const markingLateRef = useRef<Record<string, boolean>>({})
 
-  const loadUnmatched = (args: InstructorCallArgs) => {
-    getUnmatchedParticipants(args)
+  const loadUnmatched = () => {
+    getUnmatchedParticipants()
       .then((r) => setUnmatchedParticipants(r.unmatched))
       .catch(() => {/* silently ignore */})
   }
 
   const handleAddLatecomer = (participantId: string, groupId: string) => {
-    if (!callArgs) return
+    if (!sessionReady) return
     setAddingLatecomer((prev) => ({ ...prev, [participantId]: true }))
     setLateAddError((prev) => ({ ...prev, [participantId]: '' }))
-    addLateParticipant(callArgs, participantId, groupId)
+    addLateParticipant(participantId, groupId)
       .then(() => {
         setAddingLatecomer((prev) => ({ ...prev, [participantId]: false }))
-        loadGroupStatuses(callArgs)
-        loadUnmatched(callArgs)
+        loadGroupStatuses()
+        loadUnmatched()
       })
       .catch((err: unknown) => {
         setLateAddError((prev) => ({
@@ -243,38 +264,38 @@ export default function InstructorDashboard() {
   // Auto-refresh every 8s while any group hasn't completed.
   // Also refreshes the unmatched list on the same cadence when matching has run.
   useEffect(() => {
-    if (!callArgs || !groupStatuses) return
+    if (!sessionReady || !groupStatuses) return
     const needsRefresh = groupStatuses.some((g) => g.status !== 'completed')
     if (needsRefresh) {
       refreshIntervalRef.current = setInterval(() => {
-        loadGroupStatuses(callArgs)
-        loadUnmatched(callArgs)
+        loadGroupStatuses()
+        loadUnmatched()
       }, 8_000)
     }
     return () => { if (refreshIntervalRef.current) clearInterval(refreshIntervalRef.current) }
-  }, [callArgs, groupStatuses])
+  }, [sessionReady, groupStatuses]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Initial latecomer load once matching has run (groupStatuses non-empty = matched).
   useEffect(() => {
-    if (!callArgs || !groupStatuses || groupStatuses.length === 0) return
-    loadUnmatched(callArgs)
-  }, [callArgs, groupStatuses])
+    if (!sessionReady || !groupStatuses || groupStatuses.length === 0) return
+    loadUnmatched()
+  }, [sessionReady, groupStatuses]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-mark participants as Late when no group can accept them.
   useEffect(() => {
-    if (!callArgs || !unmatchedParticipants) return
+    if (!sessionReady || !unmatchedParticipants) return
     for (const p of unmatchedParticipants) {
       if (p.suggested_group === null && !markingLateRef.current[p.participant_id]) {
         markingLateRef.current[p.participant_id] = true
-        markParticipantLate(callArgs, p.participant_id)
+        markParticipantLate(p.participant_id)
           .then(() => {
             delete markingLateRef.current[p.participant_id]
-            loadUnmatched(callArgs)
+            loadUnmatched()
           })
           .catch(() => { delete markingLateRef.current[p.participant_id] })
       }
     }
-  }, [unmatchedParticipants, callArgs])
+  }, [unmatchedParticipants, sessionReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Deadlock resolution ───────────────────────────────────────────
   const [deadlockInputs, setDeadlockInputs] = useState<Record<string, string>>({})
@@ -283,13 +304,13 @@ export default function InstructorDashboard() {
   const [deadlockErrors, setDeadlockErrors] = useState<Record<string, string>>({})
 
   const submitOutcome = (groupId: string, price: number | null) => {
-    if (!callArgs) return
+    if (!sessionReady) return
     setDeadlockSubmitting((prev) => ({ ...prev, [groupId]: true }))
     setDeadlockErrors((prev) => ({ ...prev, [groupId]: '' }))
-    submitInstructorOutcome(callArgs, groupId, price)
+    submitInstructorOutcome(groupId, price)
       .then(() => {
         setDeadlockSubmitting((prev) => ({ ...prev, [groupId]: false }))
-        loadGroupStatuses(callArgs)
+        loadGroupStatuses()
       })
       .catch((err: unknown) => {
         setDeadlockErrors((prev) => ({
@@ -319,10 +340,10 @@ export default function InstructorDashboard() {
   const [finalizePhase, setFinalizePhase] = useState<FinalizePhase>({ phase: 'idle' })
 
   const handlePushOnly = async () => {
-    if (!callArgs) return
+    if (!sessionReady) return
     setFinalizePhase({ phase: 'pushing' })
     try {
-      const result = await pushResultsToClassroom(callArgs)
+      const result = await pushResultsToClassroom()
       if (result.failed.length === 0) {
         setFinalizePhase({ phase: 'success', total: result.total })
       } else {
@@ -338,10 +359,10 @@ export default function InstructorDashboard() {
   }
 
   const handleFinalize = async () => {
-    if (!callArgs) return
+    if (!sessionReady) return
     setFinalizePhase({ phase: 'finalizing' })
     try {
-      await finalizeInstance(callArgs)
+      await finalizeInstance()
     } catch (err) {
       setFinalizePhase({
         phase: 'error',
@@ -361,7 +382,7 @@ export default function InstructorDashboard() {
     ([pid, info]) => info.role === 'Kelly' && presenceStatus(presence[pid]) !== 'disconnected',
   ).length
   const alreadyMatched = groupStatuses != null && groupStatuses.length > 0
-  const canMatch = !!callArgs && !alreadyMatched && activeChrisCount >= 1 && activeKellyCount >= 1
+  const canMatch = sessionReady && !alreadyMatched && activeChrisCount >= 1 && activeKellyCount >= 1
 
   // Sort by group_id for stable numbering (same order as RosterTable uses).
   const sortedGroupStatuses = [...(groupStatuses ?? [])].sort((a, b) => a.group_id.localeCompare(b.group_id))
@@ -377,7 +398,7 @@ export default function InstructorDashboard() {
   const finalizeDisabled =
     finalizeRunning ||
     finalizePhase.phase === 'success' ||
-    !callArgs ||
+    !sessionReady ||
     !gameInstanceId ||
     (finalizePhase.phase === 'idle' &&
       (!alreadyMatched || guardResult.blocked || placeableLatecomers.length > 0))
@@ -470,7 +491,7 @@ export default function InstructorDashboard() {
             ) : (
               <button
                 onClick={handleGenerate}
-                disabled={generating || !callArgs}
+                disabled={generating || !sessionReady}
               >
                 {generating ? 'Generating…' : 'Generate Code'}
               </button>
@@ -570,7 +591,7 @@ export default function InstructorDashboard() {
                           {lateAddError[p.participant_id]}
                           {lateAddError[p.participant_id].includes('re-suggest') && (
                             <button
-                              onClick={() => callArgs && loadUnmatched(callArgs)}
+                              onClick={() => sessionReady && loadUnmatched()}
                               style={{ marginLeft: '0.5rem', fontSize: '0.75rem', padding: '0.15rem 0.4rem' }}
                             >
                               Refresh suggestions
@@ -684,16 +705,16 @@ export default function InstructorDashboard() {
         )}
 
         {/* ── Roster table ────────────────────────────────────────── */}
-        {callArgs ? (
+        {sessionReady ? (
           <RosterTable
-            callArgs={callArgs}
+            gameInstanceId={gameInstanceId ?? ''}
             stickyHeaderTop={ACTION_BAR_HEIGHT}
             groupOutcomes={sortedGroupStatuses}
             onAuthError={setAuthError}
           />
         ) : (
           <p style={{ color: '#c00' }}>
-            No valid launch token. Open this page from the classroom.
+            {gameInstanceId ? 'Setting up session…' : 'No valid launch token. Open this page from the classroom.'}
           </p>
         )}
       </main>

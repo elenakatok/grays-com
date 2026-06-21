@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getRoster, isAuthError, type InstructorCallArgs, type RosterParticipant, type RosterGroup } from '../api'
+import { getRoster, isAuthError, type RosterParticipant, type RosterGroup } from '../api'
 
 // Minimal shape needed for the Outcome column — passed in from InstructorDashboard.
 type GroupOutcome = {
@@ -80,12 +80,12 @@ function formatOutcome(
 const POLL_INTERVAL_MS = 10_000
 
 export default function RosterTable({
-  callArgs,
+  gameInstanceId,
   stickyHeaderTop = 0,
   groupOutcomes = [],
   onAuthError,
 }: {
-  callArgs: InstructorCallArgs
+  gameInstanceId: string
   stickyHeaderTop?: number
   groupOutcomes?: GroupOutcome[]
   onAuthError?: (msg: string) => void
@@ -97,13 +97,10 @@ export default function RosterTable({
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Stable string key so the effect re-runs only when the identity changes.
-  const argsKey = '_dev' in callArgs ? callArgs._dev.game_instance_id : callArgs.token
-
   useEffect(() => {
     let initialLoadDone = false
     const load = () => {
-      getRoster(callArgs)
+      getRoster()
         .then((r) => {
           initialLoadDone = true
           setParticipants(r.participants)
@@ -120,7 +117,7 @@ export default function RosterTable({
     load()
     intervalRef.current = setInterval(load, POLL_INTERVAL_MS)
     return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
-  }, [argsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [gameInstanceId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build group maps: stable sort by group_id for consistent numbering.
   const sortedGroups = [...groups].sort((a, b) => a.group_id.localeCompare(b.group_id))

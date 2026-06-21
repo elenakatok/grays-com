@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { getReportData, CLASSROOM_URL, isAuthError, type ReportGroup, type ReportConfig, type ReportParticipant, type InstructorCallArgs } from '../api'
+import { signInWithCustomToken } from 'firebase/auth'
+import { getReportData, getInstructorSession, CLASSROOM_URL, isAuthError, type ReportGroup, type ReportConfig, type ReportParticipant } from '../api'
+import { auth } from '../firebase'
 import GameHeader from '../components/GameHeader'
 
 // ── Formatting ────────────────────────────────────────────────────────────────
@@ -1105,11 +1107,32 @@ export default function Reports() {
   const tokenParam          = searchParams.get('token')
   const gameInstanceIdParam = searchParams.get('game_instance_id')
 
-  const callArgs = useMemo<InstructorCallArgs | null>(() => {
-    if (devGameInstanceId) return { _dev: { game_instance_id: devGameInstanceId } }
-    if (tokenParam) return { token: tokenParam }
-    return null
-  }, [devGameInstanceId, tokenParam])
+  const [sessionReady, setSessionReady] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const establish = async () => {
+      if (auth.currentUser) { setSessionReady(true); return }
+      const args = devGameInstanceId
+        ? { _dev: { game_instance_id: devGameInstanceId } }
+        : tokenParam
+          ? { token: tokenParam }
+          : null
+      if (!args) return
+      try {
+        const { customToken } = await getInstructorSession(args)
+        if (cancelled) return
+        await signInWithCustomToken(auth, customToken)
+        if (cancelled) return
+        setSessionReady(true)
+      } catch (err) {
+        if (cancelled) return
+        setAuthError(err instanceof Error ? err.message : 'Failed to establish session.')
+      }
+    }
+    void establish()
+    return () => { cancelled = true }
+  }, [devGameInstanceId, tokenParam]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const makeLink = (base: string): string => {
     if (devGameInstanceId) return `${base}?_dev_game_instance_id=${encodeURIComponent(devGameInstanceId)}`
@@ -1131,10 +1154,10 @@ export default function Reports() {
   const prepEstSvgRef    = useRef<SVGSVGElement>(null)
 
   useEffect(() => {
-    if (!callArgs) return
+    if (!sessionReady) return
     setLoading(true)
     setError(null)
-    getReportData(callArgs)
+    getReportData()
       .then(r => {
         setGroups(r.groups)
         setConfig(r.config)
@@ -1149,7 +1172,7 @@ export default function Reports() {
         }
         setLoading(false)
       })
-  }, [callArgs])
+  }, [sessionReady])
 
   const projectHistogram = () => {
     if (!histogramSvgRef.current) return
@@ -1277,7 +1300,7 @@ export default function Reports() {
       {/* ── Main ──────────────────────────────────────────────────── */}
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '2rem' }}>
 
-        {!callArgs && (
+        {!gameInstanceIdParam && !devGameInstanceId && (
           <p style={{ color: '#c00' }}>No valid launch token. Open this page from the classroom or dashboard.</p>
         )}
         {loading && <p style={{ color: '#64748b' }}>Loading…</p>}
