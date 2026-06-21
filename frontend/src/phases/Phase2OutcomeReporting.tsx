@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { db } from '../firebase'
-import { type CallArgs, submitLeadOutcome, submitConfirmation } from '../api'
+import { callFunctionWithSession } from '../api'
 import { parsePrice } from '../utils/parsePrice'
 
 type LeadOutcome = { price: number | null; no_deal: boolean }
@@ -24,7 +24,6 @@ type Props = {
   participantId: string
   gameInstanceId: string
   isLead: boolean
-  callArgs: CallArgs
   onComplete: () => void
 }
 
@@ -45,7 +44,6 @@ export default function Phase2OutcomeReporting({
   participantId,
   gameInstanceId,
   isLead,
-  callArgs,
   onComplete,
 }: Props) {
   const [groupData, setGroupData] = useState<GroupData | null>(null)
@@ -94,24 +92,24 @@ export default function Phase2OutcomeReporting({
       setPendingConfirm(result.proposed)
       return
     }
-    withSubmit(() => submitLeadOutcome(callArgs, result.value).then(() => setPriceInput('')))
+    withSubmit(() => callFunctionWithSession<{ ok: boolean }>('submitLeadOutcome', { price: result.value }).then(() => setPriceInput('')))
   }
 
   const handleConfirmProposed = () => {
     if (pendingConfirm == null) return
     const value = pendingConfirm
     setPendingConfirm(null)
-    withSubmit(() => submitLeadOutcome(callArgs, value).then(() => setPriceInput('')))
+    withSubmit(() => callFunctionWithSession<{ ok: boolean }>('submitLeadOutcome', { price: value }).then(() => setPriceInput('')))
   }
 
   const handleRejectProposed = () => {
     setPendingConfirm(null)
   }
 
-  const handleNoDeal = () => withSubmit(() => submitLeadOutcome(callArgs, null))
+  const handleNoDeal = () => withSubmit(() => callFunctionWithSession<{ ok: boolean }>('submitLeadOutcome', { price: null }))
 
-  const handleConfirm = () => withSubmit(() => submitConfirmation(callArgs, true))
-  const handleDisagree = () => withSubmit(() => submitConfirmation(callArgs, false))
+  const handleConfirm = () => withSubmit(() => callFunctionWithSession<{ ok: boolean; outcome: string }>('submitConfirmation', { confirmed: true }))
+  const handleDisagree = () => withSubmit(() => callFunctionWithSession<{ ok: boolean; outcome: string }>('submitConfirmation', { confirmed: false }))
 
   // ── Loading ──────────────────────────────────────────────────────
   if (!groupData) {

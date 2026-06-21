@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
 import { doc, getDoc } from 'firebase/firestore'
 import { db } from '../firebase'
-import { type CallArgs, submitDebriefOffer } from '../api'
+import { callFunctionWithSession } from '../api'
 import { parsePrice } from '../utils/parsePrice'
 
 type Props = {
   groupId: string
   participantId: string
   gameInstanceId: string
-  callArgs: CallArgs
 }
 
 const fmt = new Intl.NumberFormat('en-US', {
@@ -20,7 +19,6 @@ const fmt = new Intl.NumberFormat('en-US', {
 export default function Phase2Debrief({
   participantId,
   gameInstanceId,
-  callArgs,
 }: Props) {
   const [step, setStep] = useState<'loading' | 'question' | 'done'>('loading')
   const [priceInput, setPriceInput] = useState('')
@@ -40,7 +38,7 @@ export default function Phase2Debrief({
   const doSubmit = (value: number) => {
     setSubmitting(true)
     setActionError(null)
-    submitDebriefOffer(callArgs, value)
+    callFunctionWithSession<{ ok: boolean }>('submitDebriefOffer', { initial_offer: value })
       .then(() => { setSubmitting(false); setStep('done') })
       .catch((err: unknown) => {
         setActionError(err instanceof Error ? err.message : 'Something went wrong.')

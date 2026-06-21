@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { signInWithCustomToken, setPersistence, inMemoryPersistence } from 'firebase/auth'
 import { doc, getDoc } from 'firebase/firestore'
 import { auth, db } from '../firebase'
-import { type CallArgs, assignRole, getInfoUrls } from '../api'
+import { type CallArgs, assignRole, callFunctionWithSession, type InfoUrlsResult } from '../api'
 import Phase2OutcomeReporting from '../phases/Phase2OutcomeReporting'
 import Phase2Results from '../phases/Phase2Results'
 import Phase2Debrief from '../phases/Phase2Debrief'
@@ -59,8 +59,6 @@ export default function Play() {
   const devGameInstanceId = import.meta.env.DEV ? searchParams.get('_dev_game_instance_id') : null
 
   const [phase, setPhase] = useState<GamePhase>({ name: 'loading' })
-  // Constant after init — stored in refs to avoid re-renders.
-  const callArgsRef = useRef<CallArgs | null>(null)
   const sessionRef = useRef<SessionInfo | null>(null)
 
   useEffect(() => {
@@ -84,8 +82,6 @@ export default function Play() {
         }
         return
       }
-
-      callArgsRef.current = resolvedCallArgs
 
       try {
         const { role, customToken, participant_id, game_instance_id } =
@@ -175,7 +171,7 @@ export default function Play() {
           return
         }
 
-        const { public_info_url, private_info_url, seller_name, buyer_name } = await getInfoUrls(resolvedCallArgs)
+        const { public_info_url, private_info_url, seller_name, buyer_name } = await callFunctionWithSession<InfoUrlsResult>('getInfoUrls', {})
 
         if (!cancelled) {
           setPhase({ name: 'info', role, sellerName: seller_name, buyerName: buyer_name, publicUrl: public_info_url, privateUrl: private_info_url })
@@ -221,7 +217,6 @@ export default function Play() {
       <Phase1KnowledgeCheck
         participantId={sessionRef.current!.participantId}
         gameInstanceId={sessionRef.current!.gameInstanceId}
-        callArgs={callArgsRef.current!}
         onComplete={() => setPhase({ name: 'prep-questions' })}
       />
     )
@@ -233,7 +228,6 @@ export default function Play() {
       <Phase1PrepQuestions
         participantId={participantId}
         gameInstanceId={gameInstanceId}
-        callArgs={callArgsRef.current!}
         onComplete={() => setPhase({ name: 'name-entry' })}
       />
     )
@@ -253,7 +247,6 @@ export default function Play() {
   if (phase.name === 'hold-for-sync') {
     return (
       <Phase1HoldForSync
-        callArgs={callArgsRef.current!}
         onAdvanceToPhase2={() => setPhase({ name: 'confirmation-gate' })}
       />
     )
@@ -262,7 +255,6 @@ export default function Play() {
   if (phase.name === 'confirmation-gate') {
     return (
       <Phase2ConfirmationGate
-        callArgs={callArgsRef.current!}
         onConfirm={() => setPhase({ name: 'attendance-code' })}
         onCancel={() => setPhase({ name: 'hold-for-sync' })}
       />
@@ -272,7 +264,6 @@ export default function Play() {
   if (phase.name === 'attendance-code') {
     return (
       <Phase2AttendanceCode
-        callArgs={callArgsRef.current!}
         onValid={() => {
           const { participantId, gameInstanceId, displayName, role } = sessionRef.current!
           setPhase({ name: 'waiting-room', participantId, gameInstanceId, displayName, role })
@@ -308,7 +299,6 @@ export default function Play() {
         groupId={phase.groupId}
         participantId={phase.participantId}
         gameInstanceId={phase.gameInstanceId}
-        callArgs={callArgsRef.current!}
         onContinue={() =>
           setPhase({
             name: 'off-platform-holding',
@@ -346,7 +336,6 @@ export default function Play() {
         participantId={phase.participantId}
         gameInstanceId={phase.gameInstanceId}
         isLead={phase.isLead}
-        callArgs={callArgsRef.current!}
         onComplete={() =>
           setPhase({
             name: 'results',
@@ -381,7 +370,6 @@ export default function Play() {
         groupId={phase.groupId}
         participantId={phase.participantId}
         gameInstanceId={phase.gameInstanceId}
-        callArgs={callArgsRef.current!}
       />
     )
   }

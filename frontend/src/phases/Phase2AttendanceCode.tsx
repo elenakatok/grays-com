@@ -1,12 +1,11 @@
 import { useState } from 'react'
-import { type CallArgs, verifyAttendanceCode } from '../api'
+import { callFunctionWithSession } from '../api'
 
 type Props = {
-  callArgs: CallArgs
   onValid: () => void
 }
 
-export default function Phase2AttendanceCode({ callArgs, onValid }: Props) {
+export default function Phase2AttendanceCode({ onValid }: Props) {
   const [code, setCode] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -17,7 +16,7 @@ export default function Phase2AttendanceCode({ callArgs, onValid }: Props) {
     if (trimmed.length < 4) return
     setSubmitting(true)
     setError(null)
-    verifyAttendanceCode(callArgs, trimmed)
+    callFunctionWithSession<{ ok: boolean }>('verifyAttendanceCode', { code: trimmed })
       .then(() => onValid())
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')

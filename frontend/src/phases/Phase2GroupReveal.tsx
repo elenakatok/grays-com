@@ -2,13 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { doc, getDoc, onSnapshot } from 'firebase/firestore'
 import { ref, get } from 'firebase/database'
 import { db, rtdb } from '../firebase'
-import { type CallArgs, startNegotiation } from '../api'
+import { callFunctionWithSession } from '../api'
 
 type Props = {
   groupId: string
   participantId: string
   gameInstanceId: string
-  callArgs: CallArgs
   onContinue: () => void
 }
 
@@ -28,7 +27,6 @@ export default function Phase2GroupReveal({
   groupId,
   participantId,
   gameInstanceId,
-  callArgs,
   onContinue,
 }: Props) {
   const [state, setState] = useState<State>({ status: 'loading' })
@@ -111,7 +109,7 @@ export default function Phase2GroupReveal({
   const handleStartNegotiation = () => {
     setStarting(true)
     setStartError(null)
-    startNegotiation(callArgs)
+    callFunctionWithSession<{ ok: boolean }>('startNegotiation', {})
       .then(() => {
         if (!calledContinue.current) {
           calledContinue.current = true

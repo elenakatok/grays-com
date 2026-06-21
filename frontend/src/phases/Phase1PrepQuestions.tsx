@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { doc, updateDoc } from 'firebase/firestore'
 import { db } from '../firebase'
-import { type CallArgs, type PrepTextQuestion, getStudentPrepQuestions } from '../api'
+import { type PrepTextQuestion, callFunctionWithSession } from '../api'
 import { parsePrice } from '../utils/parsePrice'
 
 // ── Defaults (fallback if config fetch fails) ──────────────────────────────────
@@ -49,14 +49,12 @@ const fmtPrice = new Intl.NumberFormat('en-US', {
 type Props = {
   participantId: string
   gameInstanceId: string
-  callArgs: CallArgs
   onComplete: () => void
 }
 
 export default function Phase1PrepQuestions({
   participantId,
   gameInstanceId,
-  callArgs,
   onComplete,
 }: Props) {
   const [step, setStep]       = useState(0)
@@ -80,7 +78,7 @@ export default function Phase1PrepQuestions({
       // ── 1. Fetch all visible questions from config ──────────────────────────
       let qs: PrepTextQuestion[] = DEFAULT_QUESTIONS
       try {
-        const result = await getStudentPrepQuestions(callArgs)
+        const result = await callFunctionWithSession<{ ok: boolean; questions: PrepTextQuestion[] }>('getStudentPrepQuestions', {})
         if (!cancelled && result.questions.length > 0) {
           // Only preparation-category questions — KC and debrief are handled elsewhere.
           qs = result.questions
@@ -123,7 +121,7 @@ export default function Phase1PrepQuestions({
 
     void load()
     return () => { cancelled = true }
-  }, [gameInstanceId, participantId, callArgs])
+  }, [gameInstanceId, participantId])
 
   if (!loaded) {
     return (

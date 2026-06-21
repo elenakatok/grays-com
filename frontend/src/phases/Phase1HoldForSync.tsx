@@ -1,18 +1,17 @@
 import { useEffect } from 'react'
-import { type CallArgs, completePrep } from '../api'
+import { callFunctionWithSession } from '../api'
 
 type Props = {
-  callArgs: CallArgs
   onAdvanceToPhase2: () => void
 }
 
-export default function Phase1HoldForSync({ callArgs, onAdvanceToPhase2 }: Props) {
+export default function Phase1HoldForSync({ onAdvanceToPhase2 }: Props) {
   useEffect(() => {
     // Mark prep complete on the server. Idempotent — safe to call on every mount.
-    void completePrep(callArgs).catch((err: unknown) => {
+    void callFunctionWithSession<{ ok: boolean }>('completePrep', {}).catch((err: unknown) => {
       console.error('completePrep failed:', err)
     })
-  }, [callArgs])
+  }, [])
 
   return (
     <main

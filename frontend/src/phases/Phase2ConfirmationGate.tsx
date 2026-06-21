@@ -1,9 +1,8 @@
 import { useState } from 'react'
-import { type CallArgs, confirmReady } from '../api'
+import { callFunctionWithSession } from '../api'
 import { ConfirmationGate } from '../engine/ConfirmationGate'
 
 type Props = {
-  callArgs: CallArgs
   onConfirm: () => void
   onCancel: () => void
 }
@@ -13,14 +12,14 @@ const BODY =
   "If you don't show up, your partner has nobody to negotiate with.\n\n" +
   "Only continue if you are in class and ready to negotiate right now."
 
-export default function Phase2ConfirmationGate({ callArgs, onConfirm, onCancel }: Props) {
+export default function Phase2ConfirmationGate({ onConfirm, onCancel }: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const handleConfirm = () => {
     setSubmitting(true)
     setError(null)
-    confirmReady(callArgs)
+    callFunctionWithSession<{ ok: boolean }>('confirmReady', {})
       .then(() => onConfirm())
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.')

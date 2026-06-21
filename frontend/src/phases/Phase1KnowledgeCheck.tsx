@@ -2,10 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { doc, getDoc } from 'firebase/firestore'
 import { db } from '../firebase'
 import {
-  type CallArgs, type MCOption,
-  submitKnowledgeCheck,
-  submitStaticKnowledgeCheckQuestion,
-  getStudentPrepQuestions,
+  type MCOption, type KnowledgeCheckResult, type StaticKCQuestionResult, type PrepTextQuestion,
+  callFunctionWithSession,
 } from '../api'
 
 type RoleOption = { value: 'Chris' | 'Kelly'; label: string }
@@ -29,14 +27,12 @@ type Step = 'loading' | 'role' | 'static'
 type Props = {
   participantId: string
   gameInstanceId: string
-  callArgs: CallArgs
   onComplete: () => void
 }
 
 export default function Phase1KnowledgeCheck({
   participantId,
   gameInstanceId,
-  callArgs,
   onComplete,
 }: Props) {
   const [step, setStep] = useState<Step>('loading')
@@ -68,7 +64,7 @@ export default function Phase1KnowledgeCheck({
       let statics: StaticQuestion[] = []
 
       try {
-        const result = await getStudentPrepQuestions(callArgs)
+        const result = await callFunctionWithSession<{ ok: boolean; questions: PrepTextQuestion[] }>('getStudentPrepQuestions', {})
         if (cancelled) return
 
         const rawRoleQ = result.questions.find(q => q.field === 'knowledge_check')
@@ -143,7 +139,7 @@ export default function Phase1KnowledgeCheck({
 
     void load()
     return () => { cancelled = true }
-  }, [callArgs, participantId, gameInstanceId])
+  }, [participantId, gameInstanceId])
 
   // ── Role question handlers ─────────────────────────────────────────────────
 
@@ -154,7 +150,7 @@ export default function Phase1KnowledgeCheck({
     setServerError(null)
 
     try {
-      const result = await submitKnowledgeCheck(callArgs, roleSelected)
+      const result = await callFunctionWithSession<KnowledgeCheckResult>('submitKnowledgeCheck', { answer: roleSelected })
       if (result.alreadyCompleted) {
         onCompleteRef.current()
         return
@@ -193,7 +189,7 @@ export default function Phase1KnowledgeCheck({
     setServerError(null)
 
     try {
-      const result = await submitStaticKnowledgeCheckQuestion(callArgs, currentStaticQ.field, selectedAnswer)
+      const result = await callFunctionWithSession<StaticKCQuestionResult>('submitStaticKnowledgeCheckQuestion', { field: currentStaticQ.field, answer: selectedAnswer })
       setSubmittedResult({ correct: result.correct, explanation: result.explanation })
       setStaticPhase('submitted')
       setSubmitting(false)
