@@ -195,7 +195,7 @@ export default function Play() {
     }
   }, [token, devParticipantId, devGameInstanceId])
 
-  function content(): JSX.Element {
+  function content() {
   if (phase.name === 'loading') {
     return (
       <main style={{ padding: '2rem', maxWidth: '640px', margin: '0 auto' }}>
