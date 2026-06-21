@@ -91,9 +91,10 @@ export async function dispatchResults(
 export const pushResultsToClassroom = onCall(
   { invoker: 'public' },
   async (request) => {
-    const gameInstanceId = extractInstructorGameIdCall(
+    const gameInstanceId = await extractInstructorGameIdCall(
       request.data as Record<string, unknown>,
       process.env.FUNCTIONS_EMULATOR === 'true',
+      request.rawRequest.headers.authorization,
     )
 
     const callbackUrl = process.env.CLASSROOM_CALLBACK_URL ?? ''

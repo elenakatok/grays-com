@@ -4,6 +4,7 @@ import * as admin from 'firebase-admin'
 import { FieldValue, Timestamp } from 'firebase-admin/firestore'
 import { onRequest, onCall, HttpsError } from 'firebase-functions/v2/https'
 import { verifyClassroomToken, ClassroomTokenPayload } from './engine/verifyToken'
+import { verifyFirebaseToken } from './engine/verifyFirebaseToken'
 import { extractInstructorGameIdCall } from './engine/instructorAuth'
 import { reportResult } from './engine/reportResult'
 import { matchParticipants } from './matching'
@@ -123,35 +124,10 @@ export const getInfoUrls = corsOnRequest(async (req, res) => {
   }
 
   const body = req.body as Record<string, unknown>
-  let participantId: string
-  let gameInstanceId: string
-
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-
-  if (isEmulator && body._test != null) {
-    const test = body._test as Record<string, unknown>
-    if (typeof test.participant_id !== 'string' || typeof test.game_instance_id !== 'string') {
-      res.status(400).json({ error: '_test requires participant_id and game_instance_id strings' })
-      return
-    }
-    participantId = test.participant_id
-    gameInstanceId = test.game_instance_id
-  } else {
-    if (typeof body.token !== 'string') {
-      res.status(400).json({ error: 'Missing token' })
-      return
-    }
-    let payload: ClassroomTokenPayload
-    try {
-      payload = verifyClassroomToken(body.token)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Invalid token'
-      res.status(401).json({ error: message })
-      return
-    }
-    participantId = payload.participant_id
-    gameInstanceId = payload.game_instance_id
-  }
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
+  if (!ids) return
+  const { participantId, gameInstanceId } = ids
 
   try {
     const result = await getInfoUrlsForParticipant(gameInstanceId, participantId)
@@ -178,35 +154,10 @@ export const submitKnowledgeCheck = corsOnRequest(async (req, res) => {
   }
 
   const body = req.body as Record<string, unknown>
-  let participantId: string
-  let gameInstanceId: string
-
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-
-  if (isEmulator && body._test != null) {
-    const test = body._test as Record<string, unknown>
-    if (typeof test.participant_id !== 'string' || typeof test.game_instance_id !== 'string') {
-      res.status(400).json({ error: '_test requires participant_id and game_instance_id strings' })
-      return
-    }
-    participantId = test.participant_id
-    gameInstanceId = test.game_instance_id
-  } else {
-    if (typeof body.token !== 'string') {
-      res.status(400).json({ error: 'Missing token' })
-      return
-    }
-    let payload: ClassroomTokenPayload
-    try {
-      payload = verifyClassroomToken(body.token)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Invalid token'
-      res.status(401).json({ error: message })
-      return
-    }
-    participantId = payload.participant_id
-    gameInstanceId = payload.game_instance_id
-  }
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
+  if (!ids) return
+  const { participantId, gameInstanceId } = ids
 
   const answer = body.answer
   if (answer !== 'Chris' && answer !== 'Kelly') {
@@ -270,7 +221,7 @@ export const submitStaticKnowledgeCheckQuestion = corsOnRequest(async (req, res)
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const ids = extractStudentIds(body, isEmulator, res)
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
   if (!ids) return
   const { gameInstanceId, participantId } = ids
 
@@ -396,35 +347,10 @@ export const completePrep = corsOnRequest(async (req, res) => {
   }
 
   const body = req.body as Record<string, unknown>
-  let participantId: string
-  let gameInstanceId: string
-
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-
-  if (isEmulator && body._test != null) {
-    const test = body._test as Record<string, unknown>
-    if (typeof test.participant_id !== 'string' || typeof test.game_instance_id !== 'string') {
-      res.status(400).json({ error: '_test requires participant_id and game_instance_id strings' })
-      return
-    }
-    participantId = test.participant_id
-    gameInstanceId = test.game_instance_id
-  } else {
-    if (typeof body.token !== 'string') {
-      res.status(400).json({ error: 'Missing token' })
-      return
-    }
-    let payload: ClassroomTokenPayload
-    try {
-      payload = verifyClassroomToken(body.token)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Invalid token'
-      res.status(401).json({ error: message })
-      return
-    }
-    participantId = payload.participant_id
-    gameInstanceId = payload.game_instance_id
-  }
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
+  if (!ids) return
+  const { participantId, gameInstanceId } = ids
 
   try {
     await markPrepComplete(gameInstanceId, participantId)
@@ -469,35 +395,10 @@ export const confirmReady = corsOnRequest(async (req, res) => {
   }
 
   const body = req.body as Record<string, unknown>
-  let participantId: string
-  let gameInstanceId: string
-
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-
-  if (isEmulator && body._test != null) {
-    const test = body._test as Record<string, unknown>
-    if (typeof test.participant_id !== 'string' || typeof test.game_instance_id !== 'string') {
-      res.status(400).json({ error: '_test requires participant_id and game_instance_id strings' })
-      return
-    }
-    participantId = test.participant_id
-    gameInstanceId = test.game_instance_id
-  } else {
-    if (typeof body.token !== 'string') {
-      res.status(400).json({ error: 'Missing token' })
-      return
-    }
-    let payload: ClassroomTokenPayload
-    try {
-      payload = verifyClassroomToken(body.token)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Invalid token'
-      res.status(401).json({ error: message })
-      return
-    }
-    participantId = payload.participant_id
-    gameInstanceId = payload.game_instance_id
-  }
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
+  if (!ids) return
+  const { participantId, gameInstanceId } = ids
 
   try {
     await markReadyConfirmed(gameInstanceId, participantId)
@@ -578,35 +479,10 @@ export const verifyAttendanceCode = corsOnRequest(async (req, res) => {
   }
 
   const body = req.body as Record<string, unknown>
-  let participantId: string
-  let gameInstanceId: string
-
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-
-  if (isEmulator && body._test != null) {
-    const test = body._test as Record<string, unknown>
-    if (typeof test.participant_id !== 'string' || typeof test.game_instance_id !== 'string') {
-      res.status(400).json({ error: '_test requires participant_id and game_instance_id strings' })
-      return
-    }
-    participantId = test.participant_id
-    gameInstanceId = test.game_instance_id
-  } else {
-    if (typeof body.token !== 'string') {
-      res.status(400).json({ error: 'Missing token' })
-      return
-    }
-    let payload: ClassroomTokenPayload
-    try {
-      payload = verifyClassroomToken(body.token)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Invalid token'
-      res.status(401).json({ error: message })
-      return
-    }
-    participantId = payload.participant_id
-    gameInstanceId = payload.game_instance_id
-  }
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
+  if (!ids) return
+  const { participantId, gameInstanceId } = ids
 
   const code = body.code
   if (typeof code !== 'string' || code.trim().length === 0) {
@@ -782,11 +658,12 @@ export const triggerMatching = corsOnRequest(async (req, res) => {
 
 // ── Instructor helpers ────────────────────────────────────────────────────────
 
-function extractInstructorGameId(
+async function extractInstructorGameId(
   body: Record<string, unknown>,
   isEmulator: boolean,
   res: { status: (c: number) => { json: (d: object) => void } },
-): string | null {
+  authHeader?: string,
+): Promise<string | null> {
   if (isEmulator && body._dev != null) {
     const dev = body._dev as Record<string, unknown>
     if (typeof dev.game_instance_id !== 'string') {
@@ -794,6 +671,20 @@ function extractInstructorGameId(
       return null
     }
     return dev.game_instance_id
+  }
+  if (authHeader?.startsWith('Bearer ')) {
+    try {
+      const { gameInstanceId, role } = await verifyFirebaseToken(authHeader)
+      if (role !== 'instructor') {
+        res.status(403).json({ error: 'Instructor access required' })
+        return null
+      }
+      return gameInstanceId
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Invalid token'
+      res.status(401).json({ error: message })
+      return null
+    }
   }
   if (typeof body.token !== 'string') {
     res.status(400).json({ error: 'Missing token' })
@@ -814,11 +705,12 @@ function extractInstructorGameId(
   return payload.game_instance_id
 }
 
-function extractStudentIds(
+async function extractStudentIds(
   body: Record<string, unknown>,
   isEmulator: boolean,
   res: { status: (c: number) => { json: (d: object) => void } },
-): { participantId: string; gameInstanceId: string } | null {
+  authHeader?: string,
+): Promise<{ participantId: string; gameInstanceId: string } | null> {
   if (isEmulator && body._test != null) {
     const test = body._test as Record<string, unknown>
     if (typeof test.participant_id !== 'string' || typeof test.game_instance_id !== 'string') {
@@ -826,6 +718,20 @@ function extractStudentIds(
       return null
     }
     return { participantId: test.participant_id, gameInstanceId: test.game_instance_id }
+  }
+  if (authHeader?.startsWith('Bearer ')) {
+    try {
+      const { uid, gameInstanceId, role } = await verifyFirebaseToken(authHeader)
+      if (role !== 'student') {
+        res.status(403).json({ error: 'Student access required' })
+        return null
+      }
+      return { participantId: uid, gameInstanceId }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Invalid token'
+      res.status(401).json({ error: message })
+      return null
+    }
   }
   if (typeof body.token !== 'string') {
     res.status(400).json({ error: 'Missing token' })
@@ -1353,7 +1259,7 @@ export const startNegotiation = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const ids = extractStudentIds(body, isEmulator, res)
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
   if (!ids) return
   const { participantId, gameInstanceId } = ids
 
@@ -1402,7 +1308,7 @@ export const submitLeadOutcome = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const ids = extractStudentIds(body, isEmulator, res)
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
   if (!ids) return
   const { participantId, gameInstanceId } = ids
 
@@ -1468,7 +1374,7 @@ export const submitConfirmation = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const ids = extractStudentIds(body, isEmulator, res)
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
   if (!ids) return
   const { participantId, gameInstanceId } = ids
 
@@ -1565,7 +1471,7 @@ export const submitInstructorOutcome = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
   if (!gameInstanceId) return
 
   const { group_id, price } = body as { group_id?: string; price?: number | null }
@@ -1602,7 +1508,7 @@ export const submitDebriefOffer = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const ids = extractStudentIds(body, isEmulator, res)
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
   if (!ids) return
   const { participantId, gameInstanceId } = ids
 
@@ -1662,7 +1568,7 @@ export const getGroupStatuses = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
   if (!gameInstanceId) return
 
   try {
@@ -1702,7 +1608,7 @@ export const getReportData = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
   if (!gameInstanceId) return
 
   try {
@@ -1786,7 +1692,7 @@ export const getRoster = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
   if (!gameInstanceId) return
 
   try {
@@ -1838,7 +1744,7 @@ export const markParticipantLate = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
   if (!gameInstanceId) return
 
   const participantId = body.participant_id
@@ -1874,7 +1780,7 @@ export const getUnmatchedParticipants = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
   if (!gameInstanceId) return
 
   try {
@@ -1951,7 +1857,7 @@ export const addLateParticipant = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
   if (!gameInstanceId) return
 
   const participantId = body.participant_id
@@ -2446,9 +2352,10 @@ function validateQuestionSemantics(questions: PrepTextQuestion[]): string | null
 export const finalizeInstance = onCall(
   { invoker: 'public' },
   async (request) => {
-    const gameInstanceId = extractInstructorGameIdCall(
+    const gameInstanceId = await extractInstructorGameIdCall(
       request.data as Record<string, unknown>,
       process.env.FUNCTIONS_EMULATOR === 'true',
+      request.rawRequest.headers.authorization,
     )
 
     const db = admin.firestore()
@@ -2584,7 +2491,7 @@ export const getGameConfig = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
   if (!gameInstanceId) return
 
   try {
@@ -2637,7 +2544,7 @@ export const updateGameConfig = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
   if (!gameInstanceId) return
 
   // Build the partial update — only validated, present fields are written.
@@ -2777,7 +2684,7 @@ export const getStudentPrepQuestions = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const ids = extractStudentIds(body, isEmulator, res)
+  const ids = await extractStudentIds(body, isEmulator, res, req.headers.authorization)
   if (!ids) return
   const { gameInstanceId, participantId } = ids
 
@@ -2850,7 +2757,7 @@ export const syncRoster = corsOnRequest(async (req, res) => {
   if (req.method !== 'POST') { res.status(405).json({ error: 'Method not allowed' }); return }
   const body = req.body as Record<string, unknown>
   const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
-  const gameInstanceId = extractInstructorGameId(body, isEmulator, res)
+  const gameInstanceId = await extractInstructorGameId(body, isEmulator, res, req.headers.authorization)
   if (!gameInstanceId) return
 
   const rosterUrl = process.env.CLASSROOM_ROSTER_URL ?? ''
