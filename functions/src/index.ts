@@ -107,6 +107,66 @@ export const assignRole = corsOnRequest(async (req, res) => {
 })
 
 /**
+ * Exchanges an instructor classroom JWT for a Firebase custom token.
+ * The custom token lets the instructor dashboard hold an auto-refreshing
+ * Firebase session (via signInWithCustomToken) for Slice 4 Bearer auth.
+ *
+ * Request body (emulator): { _dev: { game_instance_id } }
+ * Request body (production): { token: "<instructor JWT>" }
+ * Response: { ok: true, customToken }
+ */
+export const getInstructorSession = corsOnRequest(async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' })
+    return
+  }
+
+  const body = req.body as Record<string, unknown>
+  let gameInstanceId: string
+
+  const isEmulator = process.env.FUNCTIONS_EMULATOR === 'true'
+
+  if (isEmulator && body._dev != null) {
+    const dev = body._dev as Record<string, unknown>
+    if (typeof dev.game_instance_id !== 'string') {
+      res.status(400).json({ error: '_dev requires game_instance_id' })
+      return
+    }
+    gameInstanceId = dev.game_instance_id
+  } else {
+    if (typeof body.token !== 'string') {
+      res.status(400).json({ error: 'Missing token' })
+      return
+    }
+    let payload: ClassroomTokenPayload
+    try {
+      payload = verifyClassroomToken(body.token)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Invalid token'
+      res.status(401).json({ error: message })
+      return
+    }
+    if (payload.role !== 'instructor') {
+      res.status(403).json({ ok: false, error: 'not instructor' })
+      return
+    }
+    gameInstanceId = payload.game_instance_id
+  }
+
+  try {
+    const uid = `instructor_${gameInstanceId}`
+    const customToken = await admin.auth().createCustomToken(uid, {
+      role: 'instructor',
+      game_instance_id: gameInstanceId,
+    })
+    res.json({ ok: true, customToken })
+  } catch (err) {
+    console.error('getInstructorSession error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+/**
  * Returns the PDF URLs a participant is authorized to see.
  * Reads the participant's role from their Firestore record (server-written, not
  * client-mutable) and returns only that role's private URL — the other role's
