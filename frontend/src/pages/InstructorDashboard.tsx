@@ -728,6 +728,8 @@ export default function InstructorDashboard() {
             stickyHeaderTop={ACTION_BAR_HEIGHT}
             groupOutcomes={sortedGroupStatuses}
             onAuthError={setAuthError}
+            sellerName={sellerName}
+            buyerName={buyerName}
           />
         ) : (
           <p style={{ color: '#c00' }}>

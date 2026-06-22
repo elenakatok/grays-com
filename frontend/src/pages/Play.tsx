@@ -61,6 +61,17 @@ export default function Play() {
   const [phase, setPhase] = useState<GamePhase>({ name: 'loading' })
   const sessionRef = useRef<SessionInfo | null>(null)
 
+  // PDF links persisted in sessionStorage so they survive phase transitions and reloads.
+  // Only public + own-role URL are ever stored — the counterpart's URL is never in client state.
+  const [headerInfoUrls, setHeaderInfoUrls] = useState<{
+    publicUrl: string; privateUrl: string; roleLabel: string
+  } | null>(() => {
+    try {
+      const raw = sessionStorage.getItem('grays_info_urls')
+      return raw ? (JSON.parse(raw) as { publicUrl: string; privateUrl: string; roleLabel: string }) : null
+    } catch { return null }
+  })
+
   useEffect(() => {
     let cancelled = false
 
@@ -146,7 +157,17 @@ export default function Play() {
 
       const { public_info_url, private_info_url, seller_name, buyer_name } =
         await callFunctionWithSession<InfoUrlsResult>('getInfoUrls', {})
+      // Stash public + own-role PDF URLs in sessionStorage so the header can read them
+      // across all phases and after a reload. Never store the counterpart's URL — the
+      // server never sends it, and we never have it on the client.
+      const urlBlob = {
+        publicUrl: public_info_url,
+        privateUrl: private_info_url,
+        roleLabel: role === 'Chris' ? seller_name : buyer_name,
+      }
+      sessionStorage.setItem('grays_info_urls', JSON.stringify(urlBlob))
       if (!cancelled) {
+        setHeaderInfoUrls(urlBlob)
         setPhase({ name: 'info', role, sellerName: seller_name, buyerName: buyer_name, publicUrl: public_info_url, privateUrl: private_info_url })
       }
     }
@@ -449,7 +470,7 @@ export default function Play() {
 
   return (
     <>
-      <GameHeader />
+      <GameHeader infoUrls={headerInfoUrls} />
       {content()}
     </>
   )

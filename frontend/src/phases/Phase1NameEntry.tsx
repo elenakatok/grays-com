@@ -23,8 +23,16 @@ export default function Phase1NameEntry({ participantId, gameInstanceId, onCompl
       const snap = await getDoc(
         doc(db, 'game_instances', gameInstanceId, 'participants', participantId),
       )
-      const existing = snap.data()?.display_name
-      if (typeof existing === 'string') setName(existing)
+      const data = snap.data()
+      const displayName = data?.display_name
+      const enrolledName = data?.name
+      // Returning student: use their previously chosen display_name.
+      // First visit: pre-fill with the enrolled classroom name (editable).
+      if (typeof displayName === 'string' && displayName.trim() !== '') {
+        setName(displayName)
+      } else if (typeof enrolledName === 'string') {
+        setName(enrolledName)
+      }
       setLoaded(true)
     }
     void load()
