@@ -18,7 +18,7 @@ const DEFAULT_QUESTIONS: PrepTextQuestion[] = [
     field: 'prep_estimated_other_price', type: 'number', system: true,
     category: 'preparation', format: 'number', role_target: 'both',
     prompt: "What is your best guess of the other side's walk-away value (reservation price)?",
-    placeholder: 'e.g. 250000', order: 1, hidden: false, deletable: false,
+    placeholder: 'Enter an amount', order: 1, hidden: false, deletable: false,
   },
   {
     field: 'prep_question_for_other', type: 'text', system: false,
@@ -30,7 +30,7 @@ const DEFAULT_QUESTIONS: PrepTextQuestion[] = [
     field: 'prep_planned_first_offer', type: 'number', system: true,
     category: 'preparation', format: 'number', role_target: 'both',
     prompt: 'Assuming you make the first offer, what number do you think you will put on the table? This is non-binding.',
-    placeholder: 'e.g. 300000', order: 3, hidden: false, deletable: false,
+    placeholder: 'Enter an amount', order: 3, hidden: false, deletable: false,
   },
   {
     field: 'prep_planned_offer_reason', type: 'text', system: false,

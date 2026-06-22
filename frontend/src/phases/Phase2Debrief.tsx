@@ -91,7 +91,7 @@ export default function Phase2Debrief({
         <input
           type="text"
           inputMode="decimal"
-          placeholder="e.g. 300000 or 300K"
+          placeholder="Opening amount"
           value={priceInput}
           onChange={(e) => {
             setPriceInput(e.target.value)

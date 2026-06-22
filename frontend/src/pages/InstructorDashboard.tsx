@@ -684,7 +684,7 @@ export default function InstructorDashboard() {
                         <input
                           type="text"
                           inputMode="decimal"
-                          placeholder="Price (e.g. 287.5k)"
+                          placeholder="Price"
                           value={deadlockInputs[g.group_id] ?? ''}
                           onChange={(e) => {
                             setDeadlockInputs((prev) => ({ ...prev, [g.group_id]: e.target.value }))

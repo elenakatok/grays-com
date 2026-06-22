@@ -637,7 +637,7 @@ export default function Settings() {
                   <label style={fieldLabel} htmlFor="price-chris">{savedSellerName ?? 'Seller'} — reservation price</label>
                   <input id="price-chris" type="text" inputMode="decimal" value={chrisRaw}
                     onChange={e => { setChrisRaw(e.target.value); setConfirmChris(null); setSaveError(null) }}
-                    disabled={disabled} placeholder="e.g. 25000" style={inputStyle} />
+                    disabled={disabled} placeholder="Reservation price" style={inputStyle} />
                   {savedChris != null && <p style={{ margin: '0.25rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>Saved: {USD.format(savedChris)}</p>}
                   {confirmChris != null && (
                     <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.625rem', background: '#f0f7ff', border: '1px solid #b3d4f5', borderRadius: 4 }}>
@@ -655,7 +655,7 @@ export default function Settings() {
                   <label style={fieldLabel} htmlFor="price-kelly">{savedBuyerName ?? 'Buyer'} — reservation price</label>
                   <input id="price-kelly" type="text" inputMode="decimal" value={kellyRaw}
                     onChange={e => { setKellyRaw(e.target.value); setConfirmKelly(null); setSaveError(null) }}
-                    disabled={disabled} placeholder="e.g. 475000" style={inputStyle} />
+                    disabled={disabled} placeholder="Reservation price" style={inputStyle} />
                   {savedKelly != null && <p style={{ margin: '0.25rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>Saved: {USD.format(savedKelly)}</p>}
                   {confirmKelly != null && (
                     <div style={{ marginTop: '0.5rem', padding: '0.5rem 0.625rem', background: '#f0f7ff', border: '1px solid #b3d4f5', borderRadius: 4 }}>
