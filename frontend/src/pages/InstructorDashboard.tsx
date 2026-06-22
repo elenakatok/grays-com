@@ -193,7 +193,7 @@ export default function InstructorDashboard() {
   const [presence, setPresence] = useState<Record<string, PresenceEntry>>({})
 
   useEffect(() => {
-    if (!gameInstanceId) return
+    if (!gameInstanceId || !sessionReady) return
     const attendingRef = ref(rtdb, `attending/${gameInstanceId}`)
     const presenceRef = ref(rtdb, `presence/${gameInstanceId}`)
     const unsubA = onValue(attendingRef, (snap) => {
@@ -203,7 +203,7 @@ export default function InstructorDashboard() {
       setPresence((snap.val() as Record<string, PresenceEntry>) ?? {})
     })
     return () => { unsubA(); unsubP() }
-  }, [gameInstanceId])
+  }, [gameInstanceId, sessionReady])
 
   // ── Matching ─────────────────────────────────────────────────────
   const [matching, setMatching] = useState(false)
