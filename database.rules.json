@@ -2,15 +2,15 @@
   "rules": {
     "presence": {
       "$instanceId": {
-        ".read": true,
+        ".read": "auth != null && auth.token.game_instance_id == $instanceId",
         "$participantId": {
-          ".write": "auth != null && auth.uid == $participantId"
+          ".write": "auth != null && auth.uid == $participantId && auth.token.game_instance_id == $instanceId"
         }
       }
     },
     "attending": {
       "$instanceId": {
-        ".read": true,
+        ".read": "auth != null && auth.token.game_instance_id == $instanceId",
         ".write": false
       }
     },
