@@ -2540,7 +2540,7 @@ export const getGameConfig = corsOnRequest(async (req, res) => {
  *
  * Validation:
  *   Prices (if present) — must be positive integers.
- *   URLs   (if present) — must be empty string OR a well-formed http(s) URL.
+ *   URLs   (if present) — must be empty string, a site-relative path (/foo/bar.pdf), or a well-formed http(s) URL.
  *   At least one recognised field must be present.
  *
  * Request body (emulator): { _dev: { game_instance_id }, ...fields }
@@ -2573,7 +2573,11 @@ export const updateGameConfig = corsOnRequest(async (req, res) => {
   }
 
   // ── URL fields ────────────────────────────────────────────────────
-  // Empty string = intentionally unset (allowed). Non-empty must be http(s).
+  // Valid values:
+  //   ''                 — intentionally unset
+  //   /path/to/file.pdf  — site-relative path (single leading /, not //)
+  //   https://...        — absolute http(s) URL
+  // Rejected: protocol-relative (//host/path), javascript:, bare strings, etc.
   for (const field of ['public_info_url', 'chris_info_url', 'kelly_info_url'] as const) {
     if (!(field in body)) continue
     const v = body[field]
@@ -2581,11 +2585,16 @@ export const updateGameConfig = corsOnRequest(async (req, res) => {
       res.status(400).json({ error: `${field} must be a string` }); return
     }
     if (v !== '') {
-      try {
-        const parsed = new URL(v)
-        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error()
-      } catch {
-        res.status(400).json({ error: `${field}: must be empty or a valid http(s) URL` }); return
+      // Site-relative path: single leading slash, NOT protocol-relative (//).
+      // This covers the platform's own seeded PDF defaults (/role-info/*.pdf).
+      const isSiteRelative = v.startsWith('/') && !v.startsWith('//')
+      if (!isSiteRelative) {
+        try {
+          const parsed = new URL(v)
+          if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error()
+        } catch {
+          res.status(400).json({ error: `${field}: must be empty, a valid http(s) URL, or a site-relative path starting with /` }); return
+        }
       }
     }
     update[field] = v
