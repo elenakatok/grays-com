@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { signInWithCustomToken } from 'firebase/auth'
+import { signInWithCustomToken, signOut } from 'firebase/auth'
 import { getReportData, getInstructorSession, CLASSROOM_URL, isAuthError, type ReportGroup, type ReportConfig, type ReportParticipant } from '../api'
 import { auth } from '../firebase'
 import GameHeader from '../components/GameHeader'
@@ -1112,7 +1112,24 @@ export default function Reports() {
   useEffect(() => {
     let cancelled = false
     const establish = async () => {
-      if (auth.currentUser) { setSessionReady(true); return }
+      await auth.authStateReady()
+      if (cancelled) return
+
+      if (auth.currentUser) {
+        const expectedUid = devGameInstanceId
+          ? `instructor_${devGameInstanceId}`
+          : gameInstanceIdParam
+            ? `instructor_${gameInstanceIdParam}`
+            : null
+        if (expectedUid && auth.currentUser.uid === expectedUid) {
+          setSessionReady(true)
+          return
+        }
+        // Session belongs to a different game: sign out before re-entering via JWT.
+        await signOut(auth)
+        if (cancelled) return
+      }
+
       const args = devGameInstanceId
         ? { _dev: { game_instance_id: devGameInstanceId } }
         : tokenParam

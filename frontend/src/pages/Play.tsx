@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { signInWithCustomToken, setPersistence, inMemoryPersistence } from 'firebase/auth'
+import { signInWithCustomToken, setPersistence, inMemoryPersistence, signOut } from 'firebase/auth'
 import { doc, getDoc } from 'firebase/firestore'
 import { auth, db } from '../firebase'
 import { type CallArgs, assignRole, callFunctionWithSession, type InfoUrlsResult } from '../api'
@@ -64,7 +64,143 @@ export default function Play() {
   useEffect(() => {
     let cancelled = false
 
+    // Shared Firestore-to-phase routing used by both resume and fresh-entry paths.
+    // On the resume path, role comes from pdata.role (no assignRole response).
+    // On the fresh-entry path, roleFallback is the assignRole response role (same value).
+    const doPhaseRouting = async (
+      participant_id: string,
+      game_instance_id: string,
+      roleFallback: 'Chris' | 'Kelly',
+    ) => {
+      const participantSnap = await getDoc(
+        doc(db, 'game_instances', game_instance_id, 'participants', participant_id),
+      )
+      const pdata = participantSnap.data()
+      if (pdata?.display_name) sessionRef.current!.displayName = pdata.display_name as string
+      if (pdata?.is_lead != null) sessionRef.current!.isLead = Boolean(pdata.is_lead)
+      const role: 'Chris' | 'Kelly' = (pdata?.role as 'Chris' | 'Kelly') ?? roleFallback
+      sessionRef.current!.role = role
+
+      if (pdata?.prep_status === 'complete') {
+        const confirmedReady = pdata.confirmed_ready_at != null
+        const attendanceDone = pdata.attendance_confirmed_at != null
+        if (!cancelled) {
+          if (attendanceDone) {
+            if (pdata.group_id) {
+              // Read group status to determine the correct resume phase.
+              const groupSnap = await getDoc(
+                doc(db, 'game_instances', game_instance_id, 'groups', pdata.group_id as string),
+              )
+              const gdata = groupSnap.data()
+              const groupStatus = gdata?.status as string | undefined
+              if (!cancelled) {
+                if (groupStatus === 'completed') {
+                  if (pdata.debrief_initial_offer != null) {
+                    setPhase({ name: 'debrief', groupId: pdata.group_id as string, participantId: participant_id, gameInstanceId: game_instance_id })
+                  } else {
+                    setPhase({ name: 'results', groupId: pdata.group_id as string, gameInstanceId: game_instance_id })
+                  }
+                } else if (groupStatus === 'reporting' || groupStatus === 'deadlocked') {
+                  setPhase({
+                    name: 'outcome-reporting',
+                    groupId: pdata.group_id as string,
+                    participantId: participant_id,
+                    gameInstanceId: game_instance_id,
+                    isLead: sessionRef.current!.isLead,
+                  })
+                } else if (groupStatus === 'negotiating') {
+                  setPhase({
+                    name: 'off-platform-holding',
+                    groupId: pdata.group_id as string,
+                    isLead: sessionRef.current!.isLead,
+                  })
+                } else {
+                  // 'matched' or unknown — show group reveal
+                  setPhase({
+                    name: 'group-reveal',
+                    groupId: pdata.group_id as string,
+                    participantId: participant_id,
+                    gameInstanceId: game_instance_id,
+                    displayName: sessionRef.current!.displayName,
+                    role,
+                  })
+                }
+              }
+            } else {
+              setPhase({
+                name: 'waiting-room',
+                participantId: participant_id,
+                gameInstanceId: game_instance_id,
+                displayName: sessionRef.current!.displayName,
+                role,
+              })
+            }
+          } else if (confirmedReady) {
+            setPhase({ name: 'attendance-code' })
+          } else {
+            setPhase({ name: 'hold-for-sync' })
+          }
+        }
+        return
+      }
+
+      const { public_info_url, private_info_url, seller_name, buyer_name } =
+        await callFunctionWithSession<InfoUrlsResult>('getInfoUrls', {})
+      if (!cancelled) {
+        setPhase({ name: 'info', role, sellerName: seller_name, buyerName: buyer_name, publicUrl: public_info_url, privateUrl: private_info_url })
+      }
+    }
+
     const init = async () => {
+      // Production-only: before making any JWT network call, check whether a Firebase
+      // session for this participant is already persisted in IndexedDB (browserLocalPersistence).
+      // auth.authStateReady() waits for the async IndexedDB restore before auth.currentUser
+      // is reliable. The client-side JWT decode is used only to match UIDs — all actual
+      // backend authorization still rides the server-verified Firebase ID token.
+      if (!import.meta.env.DEV && token) {
+        await auth.authStateReady()
+        if (cancelled) return
+
+        if (auth.currentUser) {
+          let resumedParticipantId: string | null = null
+          try {
+            const seg = token.split('.')[1] ?? ''
+            const payload = JSON.parse(
+              atob(seg.replace(/-/g, '+').replace(/_/g, '/')),
+            ) as Record<string, unknown>
+            if (typeof payload.participant_id === 'string') resumedParticipantId = payload.participant_id
+          } catch { /* malformed JWT — fall through to normal entry */ }
+
+          if (resumedParticipantId !== null && auth.currentUser.uid === resumedParticipantId) {
+            // Session matches: skip assignRole and signInWithCustomToken.
+            const { claims } = await auth.currentUser.getIdTokenResult()
+            if (cancelled) return
+            const participant_id = auth.currentUser.uid
+            const game_instance_id = claims.game_instance_id as string
+            sessionRef.current = {
+              participantId: participant_id,
+              gameInstanceId: game_instance_id,
+              role: 'Chris', // overridden from pdata.role in doPhaseRouting
+              displayName: '',
+              isLead: false,
+            }
+            try {
+              await doPhaseRouting(participant_id, game_instance_id, 'Chris')
+            } catch (err) {
+              if (!cancelled) {
+                setPhase({ name: 'error', message: err instanceof Error ? err.message : 'Something went wrong. Please try again.' })
+              }
+            }
+            return
+          }
+
+          // UID mismatch (different game or participant): clear the stale session.
+          await signOut(auth)
+          if (cancelled) return
+        }
+      }
+
+      // Normal entry: DEV _test bypass, JWT, or no-token error.
       let resolvedCallArgs: CallArgs
 
       if (import.meta.env.DEV && devParticipantId && devGameInstanceId) {
@@ -86,7 +222,7 @@ export default function Play() {
       try {
         const { role, customToken, participant_id, game_instance_id } =
           await assignRole(resolvedCallArgs)
-        // Initialise with role from assignRole; displayName and isLead filled after Firestore read.
+        // Initialise with role from assignRole; displayName and isLead filled in doPhaseRouting.
         sessionRef.current = {
           participantId: participant_id,
           gameInstanceId: game_instance_id,
@@ -99,83 +235,7 @@ export default function Play() {
           await setPersistence(auth, inMemoryPersistence)
         }
         await signInWithCustomToken(auth, customToken)
-
-        // Resume routing: skip already-completed steps on page reload.
-        const participantSnap = await getDoc(
-          doc(db, 'game_instances', game_instance_id, 'participants', participant_id),
-        )
-        const pdata = participantSnap.data()
-        if (pdata?.display_name) sessionRef.current.displayName = pdata.display_name as string
-        if (pdata?.is_lead != null) sessionRef.current.isLead = Boolean(pdata.is_lead)
-
-        if (pdata?.prep_status === 'complete') {
-          const confirmedReady = pdata.confirmed_ready_at != null
-          const attendanceDone = pdata.attendance_confirmed_at != null
-          if (!cancelled) {
-            if (attendanceDone) {
-              if (pdata.group_id) {
-                // Read group status to determine the correct resume phase.
-                const groupSnap = await getDoc(
-                  doc(db, 'game_instances', game_instance_id, 'groups', pdata.group_id as string),
-                )
-                const gdata = groupSnap.data()
-                const groupStatus = gdata?.status as string | undefined
-                if (!cancelled) {
-                  if (groupStatus === 'completed') {
-                    if (pdata.debrief_initial_offer != null) {
-                      setPhase({ name: 'debrief', groupId: pdata.group_id as string, participantId: participant_id, gameInstanceId: game_instance_id })
-                    } else {
-                      setPhase({ name: 'results', groupId: pdata.group_id as string, gameInstanceId: game_instance_id })
-                    }
-                  } else if (groupStatus === 'reporting' || groupStatus === 'deadlocked') {
-                    setPhase({
-                      name: 'outcome-reporting',
-                      groupId: pdata.group_id as string,
-                      participantId: participant_id,
-                      gameInstanceId: game_instance_id,
-                      isLead: sessionRef.current.isLead,
-                    })
-                  } else if (groupStatus === 'negotiating') {
-                    setPhase({
-                      name: 'off-platform-holding',
-                      groupId: pdata.group_id as string,
-                      isLead: sessionRef.current.isLead,
-                    })
-                  } else {
-                    // 'matched' or unknown — show group reveal
-                    setPhase({
-                      name: 'group-reveal',
-                      groupId: pdata.group_id as string,
-                      participantId: participant_id,
-                      gameInstanceId: game_instance_id,
-                      displayName: sessionRef.current.displayName,
-                      role,
-                    })
-                  }
-                }
-              } else {
-                setPhase({
-                  name: 'waiting-room',
-                  participantId: participant_id,
-                  gameInstanceId: game_instance_id,
-                  displayName: sessionRef.current.displayName,
-                  role,
-                })
-              }
-            } else if (confirmedReady) {
-              setPhase({ name: 'attendance-code' })
-            } else {
-              setPhase({ name: 'hold-for-sync' })
-            }
-          }
-          return
-        }
-
-        const { public_info_url, private_info_url, seller_name, buyer_name } = await callFunctionWithSession<InfoUrlsResult>('getInfoUrls', {})
-
-        if (!cancelled) {
-          setPhase({ name: 'info', role, sellerName: seller_name, buyerName: buyer_name, publicUrl: public_info_url, privateUrl: private_info_url })
-        }
+        await doPhaseRouting(participant_id, game_instance_id, role)
       } catch (err) {
         if (!cancelled) {
           const message =
